@@ -169,3 +169,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+imagenet-pico
+imagenet-mini/*
+!imagenet-mini/imagenet-1k-id2label.json
