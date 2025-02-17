@@ -63,6 +63,9 @@
             margin-bottom: 15px;
             color: #222;
         }
+        .image-gallery:has(img) + .empty-message {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -100,6 +103,9 @@
 
     <div class="images-section">
         <div class="image-gallery" id="imageGallery"></div>
+        <p class="empty-message" style="text-align: center; color: gray;">
+            Please select a model, dataset, class, and image to display.
+        </p>
     </div>
 
     <script>
