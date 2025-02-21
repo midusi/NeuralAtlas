@@ -87,6 +87,7 @@ integrated_gradients = AttributionConfig(
 layer_gradcam = AttributionConfig(
     LayerGradCam,
     layer=last_conv_layer,
+    relu_attributions=True,
     callback=lambda attr: LayerAttribution.interpolate(
         attr,
         (224, 224),

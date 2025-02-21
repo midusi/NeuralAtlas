@@ -12,6 +12,7 @@ class AttributionConfig:
         self.attribution_class = attribution_class
         self.config = kwargs
         self.callback = callback
+        self.layer = self.config.pop("layer", None)
 
     def attribute(
         self,
@@ -19,22 +20,18 @@ class AttributionConfig:
         inputs: TensorOrTupleOfTensorsGeneric,
         target: TargetType,
     ) -> TensorOrTupleOfTensorsGeneric:
-        layer = self.config.get("layer", None)
-        if layer:
-            return self.callback(
-                self.attribution_class(model, layer=layer).attribute(
-                    inputs=inputs,
-                    target=target,
-                )
+        attributor = self.attribution_class(
+            model,
+            **({"layer": self.layer} if self.layer else {}),
+        )
+
+        return self.callback(
+            attributor.attribute(
+                inputs=inputs,
+                target=target,
+                **self.config,
             )
-        else:
-            return self.callback(
-                self.attribution_class(model).attribute(
-                    inputs=inputs,
-                    target=target,
-                    **self.config,
-                )
-            )
+        )
 
     def __str__(self):
         return f"{self.attribution_class.__name__}"
