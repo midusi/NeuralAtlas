@@ -1,9 +1,48 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 const ALL_METHODS = '__all_methods__';
 const EMPTY_OBJ = {};
 const BASE_URL = import.meta.env.BASE_URL ?? '/';
+
+const VS_KEYS = ['mode', 'model', 'dataset', 'classId', 'imageId', 'method'];
+
+function readStateFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return Object.fromEntries(VS_KEYS.map((k) => [k, params.get(k)]).filter(([, v]) => v != null));
+}
+
+function writeStateToUrl(vs) {
+  const params = new URLSearchParams();
+  for (const k of VS_KEYS) if (vs[k] != null) params.set(k, vs[k]);
+  const query = params.toString();
+  window.history.replaceState(null, '', query ? `?${query}` : window.location.pathname);
+}
+
+function initialTheme() {
+  const saved = localStorage.getItem('theme');
+  if (saved === 'light' || saved === 'dark') return saved;
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+// Apply once at module load — before first render, no flash, no effect.
+document.documentElement.dataset.theme = initialTheme();
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme);
+  const toggle = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem('theme', next);
+    setTheme(next);
+  };
+  return (
+    <button
+      type="button" className="theme-toggle" onClick={toggle}
+      title="Toggle theme" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+    >{theme === 'dark' ? '☀' : '☾'}</button>
+  );
+}
 
 const METHOD_CATEGORIES = {
   gradient: {
@@ -65,6 +104,47 @@ async function fetchJson(path) {
   return response.json();
 }
 
+function buildLegacyOutputStructure(manifest, runPayloads) {
+  const structure = { models: {} };
+
+  for (const model of manifest?.models ?? []) {
+    const datasets = manifest?.datasets_by_model?.[model] ?? [];
+    const modelNode = structure.models[model] ??= { datasets: {} };
+
+    for (const dataset of datasets) {
+      const runKey = `${model}::${dataset}`;
+      const run = runPayloads[runKey];
+      const datasetNode = modelNode.datasets[dataset] ??= { classes: {} };
+
+      if (run?.summary?.metrics) {
+        datasetNode.metrics = run.summary.metrics;
+      }
+
+      for (const image of run?.images?.images ?? []) {
+        const classId = String(image.class_id);
+        const imageId = String(image.image_id);
+        const classNode = datasetNode.classes[classId] ??= { images: {} };
+        classNode.images[imageId] = {
+          outputs: image.outputs ?? {},
+          prediction: image.prediction ?? null,
+          interpretability_metrics: image.interpretability_metrics ?? {},
+          original_url: image.original_url ?? null,
+        };
+      }
+    }
+  }
+
+  for (const modelNode of Object.values(structure.models)) {
+    const datasets = modelNode?.datasets ?? EMPTY_OBJ;
+    const firstDatasetWithMetrics = Object.values(datasets).find((datasetNode) => datasetNode?.metrics);
+    if (firstDatasetWithMetrics?.metrics) {
+      modelNode.metrics = firstDatasetWithMetrics.metrics;
+    }
+  }
+
+  return structure;
+}
+
 function buildImageRecords(outputStructure, imgCache, lblCache) {
   const records = [];
   for (const [model, { datasets = {} }] of Object.entries(outputStructure?.models ?? {})) {
@@ -74,11 +154,11 @@ function buildImageRecords(outputStructure, imgCache, lblCache) {
       for (const [classId, { images = {} }] of Object.entries(classes)) {
         const filenames = imgLookup[classId] ?? [];
         const classLabel = lblLookup[classId] ?? classId;
-        for (const [imageId, { outputs = {}, prediction = null } = {}] of Object.entries(images)) {
+        for (const [imageId, { outputs = {}, prediction = null, original_url: originalUrl = null } = {}] of Object.entries(images)) {
           const filename = filenames[imageId] ?? null;
           records.push({
             model, dataset, classId, classLabel, imageId, filename,
-            originalUrl: filename ? `${dataset}/val/${classId}/${filename}` : null,
+            originalUrl: originalUrl ?? (filename ? `${dataset}/val/${classId}/${filename}` : null),
             outputs,
             prediction,
           });
@@ -151,25 +231,102 @@ function formatMetricPercent(value) {
 
 /* ── Reusable UI Components ─────────────────────────────────── */
 
-const COLORBAR_SRC = resolveAssetUrl('outputs/master_colorbar_jet.webp');
+const JET_LUT = (() => {
+  function pw(t, stops) {
+    for (let i = 0; i < stops.length - 1; i++) {
+      const [x0, y0] = stops[i], [x1, y1] = stops[i + 1];
+      if (t <= x1) return y0 + (y1 - y0) * (t - x0) / (x1 - x0);
+    }
+    return stops.at(-1)[1];
+  }
+  return Array.from({ length: 256 }, (_, i) => {
+    const t = i / 255;
+    return [
+      pw(t, [[0, 0], [0.35, 0], [0.66, 1], [0.89, 1], [1, 0.5]]),
+      pw(t, [[0, 0], [0.125, 0], [0.375, 1], [0.64, 1], [0.91, 0], [1, 0]]),
+      pw(t, [[0, 0.5], [0.11, 1], [0.34, 1], [0.65, 0], [1, 0]]),
+    ].map(v => Math.round(Math.max(0, Math.min(1, v)) * 255));
+  });
+})();
 
-function MiniImage({
-  caption,
-  src,
-  alt,
-  missingText = 'Not available',
-  showColorbar = false,
-  variant = 'attribution',
-}) {
+function applyJet(img, canvas) {
+  if (!canvas || !img.naturalWidth || !img.naturalHeight) return;
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const px = d.data;
+  for (let i = 0; i < px.length; i += 4) {
+    const [r, g, b] = JET_LUT[px[i]];
+    px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
+  }
+  ctx.putImageData(d, 0, 0);
+}
+
+function JetCanvas({ src, className, alt }) {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    if (!src) return undefined;
+    const img = new Image();
+    let cancelled = false;
+
+    img.decoding = 'async';
+    img.onload = () => {
+      if (!cancelled) applyJet(img, canvasRef.current);
+    };
+    img.src = src;
+
+    return () => { cancelled = true; };
+  }, [src]);
+
+  if (!src) return null;
+  return <canvas ref={canvasRef} className={className} role="img" aria-label={alt} />;
+}
+
+// Original shown cropped to the model's view (Resize 256 -> CenterCrop 224);
+// click toggles to the full untouched image inside the same box.
+function OriginalImage({ src, alt, className }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!src) return null;
+  return (
+    <img
+      className={`${className} original-crop${expanded ? ' is-expanded' : ''}`}
+      src={src} alt={alt} loading="lazy"
+      onClick={() => setExpanded((v) => !v)}
+      title={expanded ? 'Full image — click to crop to model view' : 'Cropped to model view (224) — click for full image'}
+    />
+  );
+}
+
+function MiniImage({ caption, src, alt, missingText = 'Not available', variant = 'attribution' }) {
   const resolvedSrc = resolveAssetUrl(src);
   return (
     <figure className="mini-image">
       <figcaption>{caption}</figcaption>
-      {resolvedSrc
-        ? <img className={`mini-image__asset mini-image__asset--${variant}`} src={resolvedSrc} alt={alt} loading="lazy" />
-        : <div className="mini-image__missing">{missingText}</div>}
-      {showColorbar && resolvedSrc && <img className="colorbar" src={COLORBAR_SRC} alt="" />}
+      {!resolvedSrc
+        ? <div className="mini-image__missing">{missingText}</div>
+        : variant === 'original'
+          ? <OriginalImage className="mini-image__asset mini-image__asset--original" src={resolvedSrc} alt={alt} />
+          : <JetCanvas className="mini-image__asset mini-image__asset--attribution" src={resolvedSrc} alt={alt} />}
     </figure>
+  );
+}
+
+function ColorbarLegend() {
+  return (
+    <div className="colorbar-legend">
+      <span className="colorbar-legend__title">Attribution</span>
+      <div className="colorbar-legend__bar" role="img" aria-label="Attribution color scale from 0 to 1" />
+      <div className="colorbar-legend__ticks" aria-hidden="true">
+        <span>0</span>
+        <span>0.25</span>
+        <span>0.5</span>
+        <span>0.75</span>
+        <span>1</span>
+      </div>
+      <p className="colorbar-legend__note">Normalized relative to each image</p>
+    </div>
   );
 }
 
@@ -177,7 +334,7 @@ function MethodFigures({ method, outputs, imageId }) {
   const entries = resolveMethodEntries(method, outputs);
   if (!entries.length) return <MiniImage caption="Method not selected" missingText="—" />;
   return entries.map(([name, url]) => (
-    <MiniImage key={name} caption={name} src={url} alt={`${name} for image ${imageId}`} showColorbar />
+    <MiniImage key={name} caption={name} src={url} alt={`${name} for image ${imageId}`} />
   ));
 }
 
@@ -335,15 +492,14 @@ function SingleImageGallery({ imageData, labels }) {
       </div>
       <PredictionBadge prediction={imageData.prediction} classId={imageData.classId} labels={labels} />
       <div className="gallery-grid gallery-grid--single">
-        <div className="image-card image-card--featured" style={{ '--delay': '80ms' }}>
-          <div className="image-card__header"><h3>Original Image</h3></div>
-          <img className="image-card__image image-card__image--original" src={resolveAssetUrl(imageData.original)} alt="Original selection" />
+        <div className="image-card" style={{ '--delay': '80ms' }}>
+          <div className="image-card__header"><h3>Image</h3></div>
+          <OriginalImage className="image-card__image image-card__image--original" src={resolveAssetUrl(imageData.original)} alt="Original selection" />
         </div>
         {outputs.map(([method, url]) => (
           <div key={method} className="image-card">
             <div className="image-card__header"><h3>{method}</h3></div>
-            <img className="image-card__image image-card__image--attribution" src={resolveAssetUrl(url)} alt={`${method} explanation`} loading="lazy" />
-            <img className="colorbar" src={COLORBAR_SRC} alt="" />
+            <JetCanvas className="image-card__image image-card__image--attribution" src={resolveAssetUrl(url)} alt={`${method} explanation`} />
           </div>
         ))}
       </div>
@@ -416,15 +572,16 @@ function resolveSelection(options, currentValue) {
 function ModelForm({ outputStructure }) {
   const modelsStruct = outputStructure?.models ?? EMPTY_OBJ;
 
-  const [vs, setVs] = useState({
+  const [vs, setVs] = useState(() => ({
     mode: 'single', model: null, dataset: null, classId: null, imageId: null, method: null,
-  });
+    ...readStateFromUrl(),
+  }));
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [imgCache, setImgCache] = useState({});
   const [lblCache, setLblCache] = useState({});
   const [dsStatus, setDsStatus] = useState({});
 
-  const patch = (update) => setVs((p) => ({ ...p, ...update }));
+  const patch = (update) => { const next = { ...vs, ...update }; setVs(next); writeStateToUrl(next); };
 
   const modelOptions = useMemo(() => Object.keys(modelsStruct).sort(), [modelsStruct]);
 
@@ -440,27 +597,34 @@ function ModelForm({ outputStructure }) {
   // Load dataset metadata (images structure + labels)
   useEffect(() => {
     if (!effectiveDataset) return;
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     const ds = effectiveDataset;
-    const updStatus = (fields) => !cancelled && setDsStatus((p) => ({ ...p, [ds]: { ...p[ds], ...fields } }));
+    const updStatus = (fields) =>
+      !signal.aborted && setDsStatus((p) => ({ ...p, [ds]: { ...p[ds], ...fields } }));
 
     if (!imgCache[ds]) {
       updStatus({ imagesLoading: true, imagesError: null });
-      fetchJson(`${ds}/${ds}_structure.json`)
-        .then((data) => { if (!cancelled) setImgCache((p) => ({ ...p, [ds]: data })); })
-        .catch(() => updStatus({ imagesError: 'Failed to load.' }))
+      fetchJson(`${ds}/${ds}_structure.json`, { signal })
+        .then((data) => { if (!signal.aborted) setImgCache((p) => ({ ...p, [ds]: data })); })
+        .catch((e) => { if (e.name !== 'AbortError') updStatus({ imagesError: 'Failed to load.' }); })
         .finally(() => updStatus({ imagesLoading: false }));
     }
 
     if (!lblCache[ds]) {
       updStatus({ labelsLoading: true, labelsError: null });
-      fetchJson('imagenet-mini/imagenet-1k-id2label.json')
-        .then((data) => { if (!cancelled) setLblCache((p) => ({ ...p, [ds]: data })); })
-        .catch(() => { if (!cancelled) { setLblCache((p) => ({ ...p, [ds]: {} })); updStatus({ labelsError: 'Failed to load.' }); } })
+      fetchJson('imagenet-mini/imagenet-1k-id2label.json', { signal })
+        .then((data) => { if (!signal.aborted) setLblCache((p) => ({ ...p, [ds]: data })); })
+        .catch((e) => {
+          if (e.name !== 'AbortError') {
+            setLblCache((p) => ({ ...p, [ds]: {} }));
+            updStatus({ labelsError: 'Failed to load.' });
+          }
+        })
         .finally(() => updStatus({ labelsLoading: false }));
     }
 
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, [effectiveDataset, imgCache, lblCache]);
 
   const imageRecords = useMemo(
@@ -559,11 +723,10 @@ function ModelForm({ outputStructure }) {
   const isLoading = dsInfo.imagesLoading || dsInfo.labelsLoading;
 
   const handleModeChange = (mode) => {
-    setVs((p) => {
-      const next = { ...p, mode };
-      if (mode !== 'single') next.imageId = null;
-      return next;
-    });
+    const next = { ...vs, mode };
+    if (mode !== 'single') next.imageId = null;
+    setVs(next);
+    writeStateToUrl(next);
   };
 
   const methodLabel = !effectiveMethod
@@ -649,6 +812,7 @@ function ModelForm({ outputStructure }) {
                 <div className="status-message" role="status">Some dataset metadata failed to load.</div>
               )}
             </div>
+            <ColorbarLegend />
           </>
         )}
       </aside>
@@ -659,6 +823,7 @@ function ModelForm({ outputStructure }) {
             <h1 className="page-title"><span>Model Explainability</span> <span>Viewer</span></h1>
             <p className="page-subtitle">Explore model behavior by image, by model, or by class across models.</p>
           </div>
+          <ThemeToggle />
         </header>
 
         <SummaryStrip text={summaryText} />
@@ -680,13 +845,43 @@ function ModelForm({ outputStructure }) {
   );
 }
 
+async function loadOutputStructure(signal) {
+  const manifest = await fetchJson('outputs/manifest.json', { signal });
+
+  const entries = Object.entries(manifest?.runs ?? {}).flatMap(([model, datasets]) =>
+    Object.entries(datasets ?? {}).map(([dataset, paths]) => ({ model, dataset, paths }))
+  );
+
+  const runPayloads = Object.fromEntries(
+    await Promise.all(
+      entries.map(async ({ model, dataset, paths }) => {
+        const [images, summary] = await Promise.all([
+          fetchJson(paths.images),
+          fetchJson(paths.summary),
+        ]);
+        return [`${model}::${dataset}`, { images, summary }];
+      })
+    )
+  );
+
+  return buildLegacyOutputStructure(manifest, runPayloads);
+}
+
 function App() {
   const [outputStructure, setOutputStructure] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetchJson('outputs/outputs_structure.json').then(setOutputStructure).catch(setError);
-  }, []);
+  const controller = new AbortController();
+
+  loadOutputStructure(controller.signal)
+    .then(setOutputStructure)
+    .catch((e) => {
+      if (e.name !== 'AbortError') setError(e);
+    });
+
+  return () => controller.abort();
+}, []);
 
   if (error) return <div className="app-status">Error loading outputs metadata.</div>;
   if (!outputStructure) return <div className="app-status">Loading viewer data...</div>;
