@@ -15,7 +15,45 @@ from tqdm.auto import tqdm
 
 from attr_config import AttributionConfig
 from backend import config
-from backend.records import ImageRecord, PredictionRecord
+from backend.records import ImageRecord, MetricValue, PredictionRecord
+
+
+def evaluate_faithfulness(
+    model: Module,
+    inputs: torch.Tensor,
+    attribution: torch.Tensor,
+    target: torch.Tensor,
+    metrics: set[str],
+) -> dict[str, MetricValue]:
+    """Faithfulness AUCs for one attribution map, keyed by metric name.
+
+    The heatmap is reduced from the attribution the same way the renderer does
+    (channel sum, absolute value) and min-max normalized to [0, 1] so the
+    morphology threshold is meaningful across methods with different scales.
+    """
+    from backend.metrics import ImportanceScore, MorphScore
+
+    heatmap = attribution.detach().sum(dim=1, keepdim=True).abs()  # (B, 1, H, W)
+    flat = heatmap.flatten(1)
+    lo = flat.min(dim=1).values.view(-1, 1, 1, 1)
+    hi = flat.max(dim=1).values.view(-1, 1, 1, 1)
+    heatmap = (heatmap - lo) / (hi - lo).clamp_min(1e-8)
+    inputs = inputs.detach()
+
+    n_steps = config.FAITHFULNESS_N_STEPS
+    blur_sigma = config.FAITHFULNESS_BLUR_SIGMA
+
+    scores: dict[str, MetricValue] = {}
+    for mode in ("mif", "lif"):
+        if mode in metrics:
+            metric = ImportanceScore(model, inputs, heatmap, target, blur_sigma=blur_sigma)
+            metric.update(mode=mode, n_steps=n_steps)
+            scores[mode] = float(metric.compute()[0].item())
+    if "morph" in metrics:
+        metric = MorphScore(model, inputs, heatmap, target, blur_sigma=blur_sigma)
+        metric.update(mode="erode", n_steps=n_steps)
+        scores["morph"] = float(metric.compute()[0].item())
+    return scores
 
 
 def build_output_filename(
@@ -170,9 +208,10 @@ class AtlasRunner:
         model_name: str,
         dataset_name: str,
         image_ext: str = "webp",
+        metrics: set[str] | None = None,
         **kwargs: Any,
     ) -> Iterator[ImageRecord]:
-        
+
         self.model.eval()
         dataloader = DataLoader(self.data, batch_size=1, shuffle=False)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +265,13 @@ class AtlasRunner:
                             **kwargs,
                         )
                         record.outputs[method_name] = output_url
+
+                        if metrics:
+                            record.interpretability_metrics[method_name] = (
+                                evaluate_faithfulness(
+                                    self.model, inputs, attribution, target, metrics
+                                )
+                            )
 
                 class_image_counters[class_id] += 1
                 pbar.update(1)

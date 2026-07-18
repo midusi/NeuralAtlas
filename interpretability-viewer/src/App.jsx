@@ -170,13 +170,17 @@ function buildImageRecords(outputStructure, imgCache, lblCache) {
       for (const [classId, { images = {} }] of Object.entries(classes)) {
         const filenames = imgLookup[classId] ?? [];
         const classLabel = lblLookup[classId] ?? classId;
-        for (const [imageId, { outputs = {}, prediction = null, original_url: originalUrl = null } = {}] of Object.entries(images)) {
+        for (const [imageId, {
+          outputs = {}, prediction = null, original_url: originalUrl = null,
+          interpretability_metrics: interpretabilityMetrics = {},
+        } = {}] of Object.entries(images)) {
           const filename = filenames[imageId] ?? null;
           records.push({
             model, dataset, classId, classLabel, imageId, filename,
             originalUrl: originalUrl ?? (filename ? `${dataset}/val/${classId}/${filename}` : null),
             outputs,
             prediction,
+            interpretabilityMetrics,
           });
         }
       }
@@ -339,7 +343,31 @@ function OriginalImage({ src, alt, className }) {
   );
 }
 
-function MiniImage({ caption, src, alt, missingText = 'Not available', variant = 'attribution', originalSrc }) {
+function MetricBadges({ metrics }) {
+  const definitions = {
+    mif: 'Most Important First AUC',
+    lif: 'Least Important First AUC',
+    morph: 'Morphological faithfulness AUC',
+  };
+  const items = Object.entries(definitions)
+    .map(([name, title]) => ({ name, title, rawValue: metrics?.[name] }))
+    .filter(({ rawValue }) => rawValue != null && rawValue !== '' && Number.isFinite(Number(rawValue)))
+    .map(({ name, title, rawValue }) => ({ name, title, value: Number(rawValue) }));
+
+  if (!items.length) return null;
+  return (
+    <dl className="metric-badges" aria-label="Interpretability metrics">
+      {items.map(({ name, title, value }) => (
+        <div key={name} className="metric-badge" title={title}>
+          <dt>{name}</dt>
+          <dd>{value.toFixed(2)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function MiniImage({ caption, src, alt, missingText = 'Not available', variant = 'attribution', originalSrc, metrics }) {
   const resolvedSrc = resolveAssetUrl(src);
   return (
     <figure className="mini-image">
@@ -349,6 +377,7 @@ function MiniImage({ caption, src, alt, missingText = 'Not available', variant =
         : variant === 'original'
           ? <OriginalImage className="mini-image__asset mini-image__asset--original" src={resolvedSrc} alt={alt} />
           : <Attribution className="mini-image__asset mini-image__asset--attribution" src={resolvedSrc} originalSrc={resolveAssetUrl(originalSrc)} alt={alt} />}
+      {resolvedSrc && variant !== 'original' && <MetricBadges metrics={metrics} />}
     </figure>
   );
 }
@@ -390,11 +419,14 @@ function ColorbarLegend() {
   );
 }
 
-function MethodFigures({ method, outputs, imageId, originalSrc }) {
+function MethodFigures({ method, outputs, imageId, originalSrc, interpretabilityMetrics }) {
   const entries = resolveMethodEntries(method, outputs);
   if (!entries.length) return <MiniImage caption="Method not selected" missingText="—" />;
   return entries.map(([name, url]) => (
-    <MiniImage key={name} caption={name} src={url} originalSrc={originalSrc} alt={`${name} for image ${imageId}`} />
+    <MiniImage
+      key={name} caption={name} src={url} originalSrc={originalSrc}
+      alt={`${name} for image ${imageId}`} metrics={interpretabilityMetrics?.[name]}
+    />
   ));
 }
 
@@ -560,6 +592,7 @@ function SingleImageGallery({ imageData, labels }) {
           <div key={method} className="image-card">
             <div className="image-card__header"><h3>{method}</h3></div>
             <Attribution className="image-card__image image-card__image--attribution" src={resolveAssetUrl(url)} originalSrc={resolveAssetUrl(imageData.original)} alt={`${method} explanation`} />
+            <MetricBadges metrics={imageData.interpretabilityMetrics?.[method]} />
           </div>
         ))}
       </div>
@@ -582,7 +615,10 @@ function ModelGridView({ records, method, ready, labels }) {
           </header>
           <div className="model-grid-card__images">
             <MiniImage caption="Original" src={record.originalUrl} alt={`Original ${record.imageId}`} missingText="Original unavailable" variant="original" />
-            <MethodFigures method={method} outputs={record.outputs} imageId={record.imageId} originalSrc={record.originalUrl} />
+            <MethodFigures
+              method={method} outputs={record.outputs} imageId={record.imageId}
+              originalSrc={record.originalUrl} interpretabilityMetrics={record.interpretabilityMetrics}
+            />
           </div>
         </article>
       ))}
@@ -611,7 +647,11 @@ function ClassCompareView({ matrix, method, ready, labels }) {
             {row.cells.map((cell) => (
               <article key={`${row.imageId}__${cell.model}`} className="compare-cell" data-model={cell.model}>
                 <PredictionBadge prediction={cell.record?.prediction} classId={row.classId} labels={labels} />
-                <MethodFigures method={method} outputs={cell.record?.outputs ?? {}} imageId={row.imageId} originalSrc={cell.record?.originalUrl} />
+                <MethodFigures
+                  method={method} outputs={cell.record?.outputs ?? {}} imageId={row.imageId}
+                  originalSrc={cell.record?.originalUrl}
+                  interpretabilityMetrics={cell.record?.interpretabilityMetrics}
+                />
               </article>
             ))}
           </div>
@@ -754,6 +794,7 @@ function ModelForm({ outputStructure }) {
     return {
       original: r.originalUrl,
       outputs: Object.fromEntries(resolveMethodEntries(effectiveMethod, r.outputs)),
+      interpretabilityMetrics: r.interpretabilityMetrics,
       prediction: r.prediction,
       classId: r.classId,
     };

@@ -54,6 +54,18 @@ def parse_args() -> argparse.Namespace:
         help=f"Image file extension (default: {config.DEFAULT_IMAGE_EXT}).",
     )
     parser.add_argument(
+        "--metrics",
+        nargs="*",
+        choices=list(config.FAITHFULNESS_METRICS),
+        default=list(config.FAITHFULNESS_METRICS),
+        metavar="{" + ",".join(config.FAITHFULNESS_METRICS) + "}",
+        help=(
+            "Faithfulness metrics to compute per method output. "
+            "Default: all. Pass --metrics with no values to disable. "
+            "Requires --recompute to backfill existing outputs."
+        ),
+    )
+    parser.add_argument(
         "--prune-stale-images",
         default=False,
         action="store_true",
