@@ -1,9 +1,13 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 const ALL_METHODS = '__all_methods__';
 const EMPTY_OBJ = {};
 const BASE_URL = import.meta.env.BASE_URL ?? '/';
+
+// Overlay display preference (heatmap composited over the original), shared by all views.
+const OverlayContext = createContext({ enabled: false, opacity: 0.8 });
+const useOverlay = () => useContext(OverlayContext);
 
 const VS_KEYS = ['mode', 'model', 'dataset', 'classId', 'imageId', 'method'];
 
@@ -89,11 +93,28 @@ function resolveMethodEntries(methodValue, outputs = {}) {
   return [[methodValue, outputs[methodValue] ?? null]];
 }
 
+// Heavy image binaries live on Hugging Face datasets; JSON metadata stays local (in git).
+// Set VITE_ASSET_SOURCE=local to serve everything from public/.
+const HF_DATASET = 'https://huggingface.co/datasets/Matgc04';
+// imagenet-pico is a *private* HF dataset. By default it's served locally (public/).
+// Only when VITE_WORKER_URL is set does it get proxied through the Cloudflare Worker
+// (which injects the HF token server-side).
+const WORKER_ORIGIN = import.meta.env.VITE_WORKER_URL;
+const HF_ROUTES = import.meta.env.VITE_ASSET_SOURCE === 'local' ? [] : [
+  { test: /^imagenet-pico-ai\/val\//, base: `${HF_DATASET}/neuralatlas-imagenet-pico-ai/resolve/main/`, strip: /^imagenet-pico-ai\// },
+  { test: /^outputs\/images\//, base: `${HF_DATASET}/neuralatlas-attributions/resolve/main/`, strip: /^outputs\// },
+  ...(WORKER_ORIGIN ? [{ test: /^imagenet-pico\//, base: `${WORKER_ORIGIN}/hf/`, strip: /^imagenet-pico\// }] : []),
+];
+
 function resolveAssetUrl(path) {
   if (!path) return null;
   const value = String(path);
   if (/^(?:[a-z]+:)?\/\//i.test(value) || value.startsWith('data:')) return value;
-  return `${BASE_URL}${value.replace(/^\/+/, '')}`;
+  const rel = value.replace(/^\/+/, '');
+  for (const route of HF_ROUTES) {
+    if (route.test.test(rel)) return `${route.base}${rel.replace(route.strip, '')}`;
+  }
+  return `${BASE_URL}${rel}`;
 }
 
 async function fetchJson(path) {
@@ -154,13 +175,17 @@ function buildImageRecords(outputStructure, imgCache, lblCache) {
       for (const [classId, { images = {} }] of Object.entries(classes)) {
         const filenames = imgLookup[classId] ?? [];
         const classLabel = lblLookup[classId] ?? classId;
-        for (const [imageId, { outputs = {}, prediction = null, original_url: originalUrl = null } = {}] of Object.entries(images)) {
+        for (const [imageId, {
+          outputs = {}, prediction = null, original_url: originalUrl = null,
+          interpretability_metrics: interpretabilityMetrics = {},
+        } = {}] of Object.entries(images)) {
           const filename = filenames[imageId] ?? null;
           records.push({
             model, dataset, classId, classLabel, imageId, filename,
             originalUrl: originalUrl ?? (filename ? `${dataset}/val/${classId}/${filename}` : null),
             outputs,
             prediction,
+            interpretabilityMetrics,
           });
         }
       }
@@ -249,7 +274,7 @@ const JET_LUT = (() => {
   });
 })();
 
-function applyJet(img, canvas) {
+function applyJet(img, canvas, overlay) {
   if (!canvas || !img.naturalWidth || !img.naturalHeight) return;
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
@@ -258,30 +283,54 @@ function applyJet(img, canvas) {
   const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const px = d.data;
   for (let i = 0; i < px.length; i += 4) {
-    const [r, g, b] = JET_LUT[px[i]];
-    px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
+    const gray = px[i];
+    const [r, g, b] = JET_LUT[gray];
+    // Overlay: amplify low attributions via gamma so diffuse methods are visible.
+    const alpha = overlay ? Math.round(Math.pow(gray / 255, 0.5) * 255) : 255;
+    px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = alpha;
   }
   ctx.putImageData(d, 0, 0);
 }
 
-function JetCanvas({ src, className, alt }) {
+function JetCanvas({ src, className, alt, overlay = false, opacity }) {
   const canvasRef = useRef(null);
   useEffect(() => {
     if (!src) return undefined;
     const img = new Image();
     let cancelled = false;
 
+    // Needed so the canvas can read pixels for the jet colormap when the heatmap is
+    // served cross-origin (Hugging Face). HF reflects the request Origin in its CORS
+    // header, so an anonymous request is allowed and the canvas stays untainted.
+    img.crossOrigin = 'anonymous';
     img.decoding = 'async';
     img.onload = () => {
-      if (!cancelled) applyJet(img, canvasRef.current);
+      if (!cancelled) applyJet(img, canvasRef.current, overlay);
     };
     img.src = src;
 
     return () => { cancelled = true; };
-  }, [src]);
+  }, [src, overlay]);
 
   if (!src) return null;
-  return <canvas ref={canvasRef} className={className} role="img" aria-label={alt} />;
+  return (
+    <canvas
+      ref={canvasRef} className={className} role="img" aria-label={alt}
+      style={opacity == null ? undefined : { opacity }}
+    />
+  );
+}
+
+// Heatmap, optionally composited over the model-view crop of the original.
+function Attribution({ src, originalSrc, alt, className }) {
+  const { enabled, opacity } = useOverlay();
+  if (!enabled || !originalSrc) return <JetCanvas className={className} src={src} alt={alt} />;
+  return (
+    <div className={`${className} overlay-stack`}>
+      <img className="overlay-stack__base" src={originalSrc} alt="" loading="lazy" />
+      <JetCanvas className="overlay-stack__heat" src={src} alt={alt} overlay opacity={opacity} />
+    </div>
+  );
 }
 
 // Original shown cropped to the model's view (Resize 256 -> CenterCrop 224);
@@ -299,7 +348,39 @@ function OriginalImage({ src, alt, className }) {
   );
 }
 
-function MiniImage({ caption, src, alt, missingText = 'Not available', variant = 'attribution' }) {
+function formatMetricBadgeValue(value) {
+  return Math.abs(value) >= 1000
+    ? new Intl.NumberFormat('en-US', { notation: 'compact', maximumSignificantDigits: 3 }).format(value)
+    : value.toFixed(2);
+}
+
+function MetricBadges({ metrics }) {
+  const definitions = {
+    mif: 'Most Important First AUC',
+    lif: 'Least Important First AUC',
+    morph: 'Morphological faithfulness AUC',
+    segment: 'Segment-wise deletion AUC',
+    infidelity: 'Infidelity (lower is better)',
+  };
+  const items = Object.entries(definitions)
+    .map(([name, title]) => ({ name, title, rawValue: metrics?.[name] }))
+    .filter(({ rawValue }) => rawValue != null && rawValue !== '' && Number.isFinite(Number(rawValue)))
+    .map(({ name, title, rawValue }) => ({ name, title, value: Number(rawValue) }));
+
+  if (!items.length) return null;
+  return (
+    <dl className="metric-badges" aria-label="Interpretability metrics">
+      {items.map(({ name, title, value }) => (
+        <div key={name} className="metric-badge" title={title}>
+          <dt>{name}</dt>
+          <dd>{formatMetricBadgeValue(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function MiniImage({ caption, src, alt, missingText = 'Not available', variant = 'attribution', originalSrc, metrics }) {
   const resolvedSrc = resolveAssetUrl(src);
   return (
     <figure className="mini-image">
@@ -308,8 +389,29 @@ function MiniImage({ caption, src, alt, missingText = 'Not available', variant =
         ? <div className="mini-image__missing">{missingText}</div>
         : variant === 'original'
           ? <OriginalImage className="mini-image__asset mini-image__asset--original" src={resolvedSrc} alt={alt} />
-          : <JetCanvas className="mini-image__asset mini-image__asset--attribution" src={resolvedSrc} alt={alt} />}
+          : <Attribution className="mini-image__asset mini-image__asset--attribution" src={resolvedSrc} originalSrc={resolveAssetUrl(originalSrc)} alt={alt} />}
+      {resolvedSrc && variant !== 'original' && <MetricBadges metrics={metrics} />}
     </figure>
+  );
+}
+
+function OverlayControl({ enabled, opacity, onToggle, onOpacity }) {
+  return (
+    <div className="overlay-control">
+      <button
+        type="button" className={`overlay-control__toggle${enabled ? ' is-on' : ''}`}
+        onClick={onToggle} aria-pressed={enabled}
+      >Overlay heatmap</button>
+      {enabled && (
+        <label className="overlay-control__opacity">
+          Opacity
+          <input
+            type="range" min="0" max="1" step="0.05" value={opacity}
+            onChange={(e) => onOpacity(Number(e.target.value))}
+          />
+        </label>
+      )}
+    </div>
   );
 }
 
@@ -330,11 +432,14 @@ function ColorbarLegend() {
   );
 }
 
-function MethodFigures({ method, outputs, imageId }) {
+function MethodFigures({ method, outputs, imageId, originalSrc, interpretabilityMetrics }) {
   const entries = resolveMethodEntries(method, outputs);
   if (!entries.length) return <MiniImage caption="Method not selected" missingText="—" />;
   return entries.map(([name, url]) => (
-    <MiniImage key={name} caption={name} src={url} alt={`${name} for image ${imageId}`} />
+    <MiniImage
+      key={name} caption={name} src={url} originalSrc={originalSrc}
+      alt={`${name} for image ${imageId}`} metrics={interpretabilityMetrics?.[name]}
+    />
   ));
 }
 
@@ -499,7 +604,8 @@ function SingleImageGallery({ imageData, labels }) {
         {outputs.map(([method, url]) => (
           <div key={method} className="image-card">
             <div className="image-card__header"><h3>{method}</h3></div>
-            <JetCanvas className="image-card__image image-card__image--attribution" src={resolveAssetUrl(url)} alt={`${method} explanation`} />
+            <Attribution className="image-card__image image-card__image--attribution" src={resolveAssetUrl(url)} originalSrc={resolveAssetUrl(imageData.original)} alt={`${method} explanation`} />
+            <MetricBadges metrics={imageData.interpretabilityMetrics?.[method]} />
           </div>
         ))}
       </div>
@@ -522,7 +628,10 @@ function ModelGridView({ records, method, ready, labels }) {
           </header>
           <div className="model-grid-card__images">
             <MiniImage caption="Original" src={record.originalUrl} alt={`Original ${record.imageId}`} missingText="Original unavailable" variant="original" />
-            <MethodFigures method={method} outputs={record.outputs} imageId={record.imageId} />
+            <MethodFigures
+              method={method} outputs={record.outputs} imageId={record.imageId}
+              originalSrc={record.originalUrl} interpretabilityMetrics={record.interpretabilityMetrics}
+            />
           </div>
         </article>
       ))}
@@ -551,7 +660,11 @@ function ClassCompareView({ matrix, method, ready, labels }) {
             {row.cells.map((cell) => (
               <article key={`${row.imageId}__${cell.model}`} className="compare-cell" data-model={cell.model}>
                 <PredictionBadge prediction={cell.record?.prediction} classId={row.classId} labels={labels} />
-                <MethodFigures method={method} outputs={cell.record?.outputs ?? {}} imageId={row.imageId} />
+                <MethodFigures
+                  method={method} outputs={cell.record?.outputs ?? {}} imageId={row.imageId}
+                  originalSrc={cell.record?.originalUrl}
+                  interpretabilityMetrics={cell.record?.interpretabilityMetrics}
+                />
               </article>
             ))}
           </div>
@@ -577,6 +690,8 @@ function ModelForm({ outputStructure }) {
     ...readStateFromUrl(),
   }));
   const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [overlay, setOverlay] = useState(false);
+  const [overlayOpacity, setOverlayOpacity] = useState(0.8);
   const [imgCache, setImgCache] = useState({});
   const [lblCache, setLblCache] = useState({});
   const [dsStatus, setDsStatus] = useState({});
@@ -692,6 +807,7 @@ function ModelForm({ outputStructure }) {
     return {
       original: r.originalUrl,
       outputs: Object.fromEntries(resolveMethodEntries(effectiveMethod, r.outputs)),
+      interpretabilityMetrics: r.interpretabilityMetrics,
       prediction: r.prediction,
       classId: r.classId,
     };
@@ -748,6 +864,7 @@ function ModelForm({ outputStructure }) {
   })();
 
   return (
+    <OverlayContext.Provider value={{ enabled: overlay, opacity: overlayOpacity }}>
     <div className={`viewer-layout${panelCollapsed ? ' viewer-layout--collapsed' : ''}`}>
       <aside className={`controls-panel${panelCollapsed ? ' controls-panel--collapsed' : ''}`}>
         {panelCollapsed ? (
@@ -780,7 +897,7 @@ function ModelForm({ outputStructure }) {
               <SearchableSelect
                 label="Dataset" value={effectiveDataset}
                 items={datasetOptions}
-                onSelect={(v) => patch({ dataset: v, classId: null, imageId: null })}
+                onSelect={(v) => patch({ dataset: v })}
                 placeholder="Search dataset"
                 disabled={!datasetOptions.length}
               />
@@ -812,6 +929,10 @@ function ModelForm({ outputStructure }) {
                 <div className="status-message" role="status">Some dataset metadata failed to load.</div>
               )}
             </div>
+            <OverlayControl
+              enabled={overlay} opacity={overlayOpacity}
+              onToggle={() => setOverlay((v) => !v)} onOpacity={setOverlayOpacity}
+            />
             <ColorbarLegend />
           </>
         )}
@@ -842,6 +963,7 @@ function ModelForm({ outputStructure }) {
         )}
       </main>
     </div>
+    </OverlayContext.Provider>
   );
 }
 

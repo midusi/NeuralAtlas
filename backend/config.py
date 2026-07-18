@@ -3,16 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 
 DEFAULT_MODEL_NAME = "alexnet"
-DATASET_NAME = "imagenet-pico"
+DATASET_NAME = "imagenet-pico-ai"
 BASE_PUBLIC_DIR = Path("interpretability-viewer/public")
 OUTPUT_ROOT = BASE_PUBLIC_DIR / "outputs"
 OUTPUT_IMAGES_DIR = OUTPUT_ROOT / "images"
 OUTPUT_CATALOGS_DIR = OUTPUT_ROOT / "catalogs"
 OUTPUT_RUNS_DIR = OUTPUT_ROOT / "runs"
-LEGACY_OUTPUT_STRUCTURE_PATH = OUTPUT_ROOT / "outputs_structure.json"
 DEFAULT_IMAGE_EXT = "avif"
 DEFAULT_NUM_SAMPLES = 20
 DEFAULT_EXPORT_BATCH_IMAGES = 5
+FAITHFULNESS_METRICS = ("lif", "morph", "segment", "infidelity")
+FAITHFULNESS_N_STEPS = 50
+FAITHFULNESS_BLUR_SIGMA = None
+INFIDELITY_N_PERTURB_SAMPLES = 25
+INFIDELITY_NOISE_STD = 0.2
+INFIDELITY_MAX_EXAMPLES_PER_BATCH = 5
+INFIDELITY_RANDOM_SEED = 0
 OUTPUT_IMAGES_BASE_URL = "/outputs/images"
 ATTRIBUTION_ENCODING = {
     "format": "normalized_grayscale",

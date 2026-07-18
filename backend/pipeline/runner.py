@@ -88,6 +88,7 @@ def run_generation(args: Namespace) -> None:
         model_name=args.model,
         dataset_name=config.DATASET_NAME,
         image_ext=args.image_ext,
+        metrics=set(args.metrics),
     ):
         buffer.append(record)
         if len(buffer) >= args.export_batch_images:
