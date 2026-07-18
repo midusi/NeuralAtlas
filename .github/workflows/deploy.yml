@@ -39,6 +39,11 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: interpretability-viewer
+        env:
+          # URL pública del Cloudflare Worker (inyecta el token HF server-side).
+          # Se define en Settings > Secrets and variables > Actions > Variables.
+          # Si no está seteada, imagenet-pico cae a los assets locales.
+          VITE_WORKER_URL: ${{ vars.VITE_WORKER_URL }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

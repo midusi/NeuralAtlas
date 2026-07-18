@@ -96,9 +96,14 @@ function resolveMethodEntries(methodValue, outputs = {}) {
 // Heavy image binaries live on Hugging Face datasets; JSON metadata stays local (in git).
 // Set VITE_ASSET_SOURCE=local to serve everything from public/.
 const HF_DATASET = 'https://huggingface.co/datasets/Matgc04';
+// imagenet-pico is a *private* HF dataset. By default it's served locally (public/).
+// Only when VITE_WORKER_URL is set does it get proxied through the Cloudflare Worker
+// (which injects the HF token server-side).
+const WORKER_ORIGIN = import.meta.env.VITE_WORKER_URL;
 const HF_ROUTES = import.meta.env.VITE_ASSET_SOURCE === 'local' ? [] : [
   { test: /^imagenet-pico-ai\/val\//, base: `${HF_DATASET}/neuralatlas-imagenet-pico-ai/resolve/main/`, strip: /^imagenet-pico-ai\// },
   { test: /^outputs\/images\//, base: `${HF_DATASET}/neuralatlas-attributions/resolve/main/`, strip: /^outputs\// },
+  ...(WORKER_ORIGIN ? [{ test: /^imagenet-pico\//, base: `${WORKER_ORIGIN}/hf/`, strip: /^imagenet-pico\// }] : []),
 ];
 
 function resolveAssetUrl(path) {
