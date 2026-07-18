@@ -31,7 +31,7 @@ def evaluate_faithfulness(
     (channel sum, absolute value) and min-max normalized to [0, 1] so the
     morphology threshold is meaningful across methods with different scales.
     """
-    from backend.metrics import ImportanceScore, MorphScore
+    from backend.metrics import ImportanceScore, KmeansConfig, MorphScore, SegmentScore
 
     heatmap = attribution.detach().sum(dim=1, keepdim=True).abs()  # (B, 1, H, W)
     flat = heatmap.flatten(1)
@@ -53,6 +53,19 @@ def evaluate_faithfulness(
         metric = MorphScore(model, inputs, heatmap, target, blur_sigma=blur_sigma)
         metric.update(mode="erode", n_steps=n_steps)
         scores["morph"] = float(metric.compute()[0].item())
+    if "segment" in metrics:
+        metric = SegmentScore(
+            model,
+            inputs,
+            heatmap,
+            target,
+            KmeansConfig(),
+            segmentation_inputs=inputs,
+            mode="deletion",
+            blur_sigma=blur_sigma,
+        )
+        metric.update()
+        scores["segment"] = float(metric.compute()[0].item())
     return scores
 
 

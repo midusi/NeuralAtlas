@@ -348,6 +348,7 @@ function MetricBadges({ metrics }) {
     mif: 'Most Important First AUC',
     lif: 'Least Important First AUC',
     morph: 'Morphological faithfulness AUC',
+    segment: 'Segment-wise deletion AUC',
   };
   const items = Object.entries(definitions)
     .map(([name, title]) => ({ name, title, rawValue: metrics?.[name] }))
