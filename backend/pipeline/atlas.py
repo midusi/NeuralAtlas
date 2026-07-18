@@ -25,13 +25,21 @@ def evaluate_faithfulness(
     target: torch.Tensor,
     metrics: set[str],
 ) -> dict[str, MetricValue]:
-    """Faithfulness AUCs for one attribution map, keyed by metric name.
+    """Faithfulness scores for one attribution map, keyed by metric name.
 
     The heatmap is reduced from the attribution the same way the renderer does
     (channel sum, absolute value) and min-max normalized to [0, 1] so the
     morphology threshold is meaningful across methods with different scales.
+    Infidelity instead receives the original, unreduced attribution tensor
+    because its magnitude is part of the metric.
     """
-    from backend.metrics import ImportanceScore, KmeansConfig, MorphScore, SegmentScore
+    from backend.metrics import (
+        ImportanceScore,
+        InfidelityScore,
+        KmeansConfig,
+        MorphScore,
+        SegmentScore,
+    )
 
     heatmap = attribution.detach().sum(dim=1, keepdim=True).abs()  # (B, 1, H, W)
     flat = heatmap.flatten(1)
@@ -66,6 +74,15 @@ def evaluate_faithfulness(
         )
         metric.update()
         scores["segment"] = float(metric.compute()[0].item())
+    if "infidelity" in metrics:
+        metric = InfidelityScore(model, inputs, attribution, target)
+        metric.update(
+            n_perturb_samples=config.INFIDELITY_N_PERTURB_SAMPLES,
+            noise_std=config.INFIDELITY_NOISE_STD,
+            max_examples_per_batch=config.INFIDELITY_MAX_EXAMPLES_PER_BATCH,
+            random_seed=config.INFIDELITY_RANDOM_SEED,
+        )
+        scores["infidelity"] = float(metric.compute()[0].item())
     return scores
 
 

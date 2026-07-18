@@ -575,9 +575,10 @@ body {
 .metric-badge {
   min-width: 0;
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  gap: 0.25rem;
+  gap: 0.1rem;
   padding: 0.28rem 0.32rem;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -595,9 +596,12 @@ body {
 
 .metric-badge dd {
   margin: 0;
+  max-width: 100%;
   font-size: 0.7rem;
   font-weight: 650;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .image-card__image,

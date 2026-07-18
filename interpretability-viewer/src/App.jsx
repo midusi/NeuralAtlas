@@ -343,12 +343,19 @@ function OriginalImage({ src, alt, className }) {
   );
 }
 
+function formatMetricBadgeValue(value) {
+  return Math.abs(value) >= 1000
+    ? new Intl.NumberFormat('en-US', { notation: 'compact', maximumSignificantDigits: 3 }).format(value)
+    : value.toFixed(2);
+}
+
 function MetricBadges({ metrics }) {
   const definitions = {
     mif: 'Most Important First AUC',
     lif: 'Least Important First AUC',
     morph: 'Morphological faithfulness AUC',
     segment: 'Segment-wise deletion AUC',
+    infidelity: 'Infidelity (lower is better)',
   };
   const items = Object.entries(definitions)
     .map(([name, title]) => ({ name, title, rawValue: metrics?.[name] }))
@@ -361,7 +368,7 @@ function MetricBadges({ metrics }) {
       {items.map(({ name, title, value }) => (
         <div key={name} className="metric-badge" title={title}>
           <dt>{name}</dt>
-          <dd>{value.toFixed(2)}</dd>
+          <dd>{formatMetricBadgeValue(value)}</dd>
         </div>
       ))}
     </dl>
