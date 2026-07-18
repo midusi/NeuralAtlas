@@ -93,11 +93,23 @@ function resolveMethodEntries(methodValue, outputs = {}) {
   return [[methodValue, outputs[methodValue] ?? null]];
 }
 
+// Heavy image binaries live on Hugging Face datasets; JSON metadata stays local (in git).
+// Set VITE_ASSET_SOURCE=local to serve everything from public/.
+const HF_DATASET = 'https://huggingface.co/datasets/Matgc04';
+const HF_ROUTES = import.meta.env.VITE_ASSET_SOURCE === 'local' ? [] : [
+  { test: /^imagenet-pico-ai\/val\//, base: `${HF_DATASET}/neuralatlas-imagenet-pico-ai/resolve/main/`, strip: /^imagenet-pico-ai\// },
+  { test: /^outputs\/images\//, base: `${HF_DATASET}/neuralatlas-attributions/resolve/main/`, strip: /^outputs\// },
+];
+
 function resolveAssetUrl(path) {
   if (!path) return null;
   const value = String(path);
   if (/^(?:[a-z]+:)?\/\//i.test(value) || value.startsWith('data:')) return value;
-  return `${BASE_URL}${value.replace(/^\/+/, '')}`;
+  const rel = value.replace(/^\/+/, '');
+  for (const route of HF_ROUTES) {
+    if (route.test.test(rel)) return `${route.base}${rel.replace(route.strip, '')}`;
+  }
+  return `${BASE_URL}${rel}`;
 }
 
 async function fetchJson(path) {
@@ -278,6 +290,10 @@ function JetCanvas({ src, className, alt, overlay = false, opacity }) {
     const img = new Image();
     let cancelled = false;
 
+    // Needed so the canvas can read pixels for the jet colormap when the heatmap is
+    // served cross-origin (Hugging Face). HF reflects the request Origin in its CORS
+    // header, so an anonymous request is allowed and the canvas stays untainted.
+    img.crossOrigin = 'anonymous';
     img.decoding = 'async';
     img.onload = () => {
       if (!cancelled) applyJet(img, canvasRef.current, overlay);

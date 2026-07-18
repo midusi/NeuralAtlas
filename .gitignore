@@ -173,6 +173,11 @@ cython_debug/
 imagenet-mini/*
 !imagenet-mini/imagenet-1k-id2label.json
 
+# Heavy image binaries now hosted on Hugging Face (served at runtime); kept on disk, not tracked.
+# JSON metadata in these dirs stays tracked.
+interpretability-viewer/public/outputs/images/
+interpretability-viewer/public/imagenet-pico-ai/val/
+
 
 
 # Logs
