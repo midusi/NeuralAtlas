@@ -177,6 +177,7 @@ imagenet-mini/*
 # JSON metadata in these dirs stays tracked.
 interpretability-viewer/public/outputs/images/
 interpretability-viewer/public/imagenet-pico-ai/val/
+interpretability-viewer/public/imagenet-pico/val/
 
 
 
