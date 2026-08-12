@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 const ALL_METHODS = '__all_methods__';
@@ -117,8 +117,8 @@ function resolveAssetUrl(path) {
   return `${BASE_URL}${rel}`;
 }
 
-async function fetchJson(path) {
-  const response = await fetch(resolveAssetUrl(path));
+async function fetchJson(path, options) {
+  const response = await fetch(resolveAssetUrl(path), options);
   if (!response.ok) {
     throw new Error(`Failed to load ${path}: ${response.status}`);
   }
@@ -294,6 +294,9 @@ function applyJet(img, canvas, overlay) {
 
 function JetCanvas({ src, className, alt, overlay = false, opacity }) {
   const canvasRef = useRef(null);
+  const imageRef = useRef(null);
+  const overlayRef = useRef(overlay);
+  overlayRef.current = overlay;
   useEffect(() => {
     if (!src) return undefined;
     const img = new Image();
@@ -305,12 +308,22 @@ function JetCanvas({ src, className, alt, overlay = false, opacity }) {
     img.crossOrigin = 'anonymous';
     img.decoding = 'async';
     img.onload = () => {
-      if (!cancelled) applyJet(img, canvasRef.current, overlay);
+      if (!cancelled) {
+        imageRef.current = img;
+        applyJet(img, canvasRef.current, overlayRef.current);
+      }
     };
     img.src = src;
 
-    return () => { cancelled = true; };
-  }, [src, overlay]);
+    return () => {
+      cancelled = true;
+      imageRef.current = null;
+    };
+  }, [src]);
+
+  useLayoutEffect(() => {
+    if (imageRef.current) applyJet(imageRef.current, canvasRef.current, overlay);
+  }, [overlay]);
 
   if (!src) return null;
   return (
@@ -324,11 +337,11 @@ function JetCanvas({ src, className, alt, overlay = false, opacity }) {
 // Heatmap, optionally composited over the model-view crop of the original.
 function Attribution({ src, originalSrc, alt, className }) {
   const { enabled, opacity } = useOverlay();
-  if (!enabled || !originalSrc) return <JetCanvas className={className} src={src} alt={alt} />;
+  if (!originalSrc) return <JetCanvas className={className} src={src} alt={alt} />;
   return (
     <div className={`${className} overlay-stack`}>
       <img className="overlay-stack__base" src={originalSrc} alt="" loading="lazy" />
-      <JetCanvas className="overlay-stack__heat" src={src} alt={alt} overlay opacity={opacity} />
+      <JetCanvas className="overlay-stack__heat" src={src} alt={alt} overlay={enabled} opacity={enabled ? opacity : 1} />
     </div>
   );
 }
@@ -978,8 +991,8 @@ async function loadOutputStructure(signal) {
     await Promise.all(
       entries.map(async ({ model, dataset, paths }) => {
         const [images, summary] = await Promise.all([
-          fetchJson(paths.images),
-          fetchJson(paths.summary),
+          fetchJson(paths.images, { signal }),
+          fetchJson(paths.summary, { signal }),
         ]);
         return [`${model}::${dataset}`, { images, summary }];
       })
