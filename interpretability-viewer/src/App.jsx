@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AtlasMark } from './AtlasMark';
+import { useAtlasFavicon } from './atlas-mark';
 import './App.css';
 
 const ALL_METHODS = '__all_methods__';
@@ -954,7 +956,10 @@ function ModelForm({ outputStructure }) {
       <main className="viewer-content">
         <header className="page-header">
           <div>
-            <h1 className="page-title"><span>Model Explainability</span> <span>Viewer</span></h1>
+            <div className="page-title-row">
+              <AtlasMark size={34} />
+              <h1 className="page-title"><span>Model Explainability</span> <span>Viewer</span></h1>
+            </div>
             <p className="page-subtitle">Explore model behavior by image, by model, or by class across models.</p>
           </div>
           <ThemeToggle />
@@ -1005,6 +1010,8 @@ async function loadOutputStructure(signal) {
 function App() {
   const [outputStructure, setOutputStructure] = useState(null);
   const [error, setError] = useState(null);
+
+  useAtlasFavicon();
 
   useEffect(() => {
   const controller = new AbortController();

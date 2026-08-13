@@ -16,6 +16,9 @@
   --image-bg: #f0f1f4;
   --shadow-soft: 0 16px 30px rgba(18, 24, 38, 0.08);
   --shadow-card: 0 8px 18px rgba(18, 24, 38, 0.08);
+  --logo-0: #eef3f4;
+  --logo-1: #3f9b9b;
+  --logo-2: #0a3f43;
   --sidebar-width: 310px;
   --sidebar-collapsed-width: 56px;
 }
@@ -36,6 +39,9 @@
   --image-bg: #0f1115;
   --shadow-soft: 0 16px 30px rgba(0, 0, 0, 0.45);
   --shadow-card: 0 8px 18px rgba(0, 0, 0, 0.35);
+  --logo-0: #171b21;
+  --logo-1: #1f8a83;
+  --logo-2: #7ee7d8;
 }
 
 *,
@@ -376,6 +382,17 @@ body {
   justify-content: space-between;
   gap: 1rem;
   padding: 0.35rem 0 0.65rem;
+}
+
+.page-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.atlas-mark {
+  display: block;
+  flex-shrink: 0;
 }
 
 .page-title {
