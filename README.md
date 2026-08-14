@@ -18,6 +18,12 @@ Python version are pinned in `pyproject.toml` / `uv.lock` / `.python-version`
    uv run python main.py --help
    ```
 
+The paired AI dataset generation feature lives in the backend and can be run with:
+
+```bash
+uv run python -m backend.ai_dataset --help
+```
+
 ## Frontend (React + Vite)
 
 To run in development mode:

@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 neuralatlas = "backend.cli:main"
+neuralatlas-ai-dataset = "backend.ai_dataset.cli:main"
 
 [build-system]
 requires = ["hatchling"]
