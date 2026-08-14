@@ -125,6 +125,7 @@ def _make_superpixel_runtime_kwargs(mask_fn: Callable[..., object], **seg_kwargs
 
 def method_catalog() -> list[MethodCatalogEntry]:
     base_entries = [
+        MethodCatalogEntry("RISE", "RISE", "perturbation"),
         MethodCatalogEntry("Occlusion", "Occlusion", "perturbation"),
         MethodCatalogEntry("GuidedGradCam", "GuidedGradCam", "gradient", True),
         MethodCatalogEntry("GradientShap", "GradientShap", "gradient"),
@@ -178,6 +179,8 @@ def build_interp_methods(
     )
     from skimage.segmentation import quickshift, slic
 
+    from backend.rise import RISE
+
     slic_medium = _make_superpixel_runtime_kwargs(
         slic,
         n_segments=100,
@@ -200,6 +203,14 @@ def build_interp_methods(
     )
 
     return [
+        AttributionConfig(
+            RISE,
+            n_masks=2048,
+            grid_size=7,
+            probability=0.5,
+            mask_batch_size=128,
+            seed=0,
+        ),
         AttributionConfig(
             Occlusion,
             sliding_window_shapes=(3, 15, 15),
