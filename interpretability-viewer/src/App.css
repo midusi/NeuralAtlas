@@ -115,7 +115,6 @@
      wraps, so RenderBar overwrites this on the root from its own measured
      height. What is here is only the first-frame fallback. */
   --renderbar-h: 37px;
-  --wiki-width: 400px;
   /* The content column's side gutter — the render strip bleeds across it. */
   --content-gutter: var(--space-xl);
 }
@@ -193,7 +192,7 @@ body {
 .tiny-form__label,
 .stat-rail__label,
 .section-rule__label,
-.panel-header__label,
+.context-card__slot-label,
 .mini-image figcaption,
 .image-card h3,
 .colorbar-legend__title,
@@ -284,8 +283,9 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Opens the glossary. A book glyph sized to the theme toggle beside it: it is
-   a way out of the page, not one of the three modes. */
+/* Shows or hides the context card. A book glyph sized to the theme toggle
+   beside it — it governs a band of the page, so it carries the state of that
+   band rather than reading as one of the three modes. */
 .topbar__wiki {
   flex-shrink: 0;
   display: flex;
@@ -306,6 +306,12 @@ body {
 .topbar__wiki:hover {
   background: var(--accent-subtle);
   color: var(--accent-strong);
+}
+
+/* On is ink, not a fill: the card being on screen is already the loud signal,
+   and a second filled control up here would compete with the mode pill. */
+.topbar__wiki.is-on {
+  color: var(--accent);
 }
 
 /* ── Selection bar ──────────────────────────────────────────────
@@ -751,95 +757,9 @@ body {
   color: var(--accent);
 }
 
-/* ── Reference panel ────────────────────────────────────────────
-   A card with fixed slots, not a document. The two prose lines and the fact
-   rows sit in the same place for every entry, so switching subject changes
-   the words and nothing else. */
-
-.wiki-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 290;
-  background: rgba(18, 24, 38, 0.28);
-}
-
-.wiki-panel {
-  position: fixed;
-  z-index: 300;
-  top: 0;
-  right: 0;
-  width: min(var(--wiki-width), 100vw);
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-  padding: var(--space-lg);
-  background: var(--surface1);
-  border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-3);
-}
-
-.wiki-panel__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-sm);
-}
-
-.wiki-panel__close {
-  padding: var(--space-xs) var(--space-sm);
-  border-radius: var(--radius-control);
-  color: var(--text2);
-  line-height: 1;
-  transition: background-color var(--t-standard) ease, color var(--t-standard) ease;
-}
-
-.wiki-panel__close:hover {
-  background: var(--ghost-hover);
-  color: var(--text1);
-}
-
-/* Kind tabs: the same tab shape as the viewer modes, so "which section" reads
-   as navigation here too. */
-.wiki-kinds {
-  display: flex;
-  gap: var(--space-xs);
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-
-.wiki-kind {
-  padding: var(--space-2xs) var(--space-sm);
-  border-radius: var(--radius-pill);
-  font-size: var(--fs-caption);
-  font-weight: 600;
-  color: var(--text2);
-  transition: background-color var(--t-standard) ease, color var(--t-standard) ease;
-}
-
-.wiki-kind:hover {
-  background: var(--ghost-hover);
-  color: var(--text1);
-}
-
-.wiki-kind.is-on,
-.wiki-kind.is-on:hover {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-/* The one scrolling thing in the panel. Methods run to eighteen, so the picker
-   takes the overflow and the card below it never moves. */
-.wiki-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2xs);
-  max-height: 116px;
-  overflow-y: auto;
-  padding-bottom: var(--space-sm);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
+/* ── Glossary bits ──────────────────────────────────────────────
+   What is left of the reference layer after the side panel went: the two
+   pieces the context card reads the glossary with. */
 
 .wiki-chip {
   padding: var(--space-2xs) var(--space-sm);
@@ -864,32 +784,6 @@ body {
   font-weight: 600;
 }
 
-.wiki-card {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-}
-
-/* Two lines held open, because "SLIC / Quickshift / KMeans" wraps and
-   "Saliency" does not. */
-.wiki-card__title {
-  font-family: var(--font-display);
-  font-size: var(--fs-subheading);
-  font-weight: 600;
-  line-height: 1.2;
-  min-height: calc(2 * 1.2em);
-}
-
-.wiki-card__tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-xs);
-  min-height: 20px;
-}
-
 .wiki-tag {
   padding: 1px var(--space-sm);
   border: 1px solid var(--border);
@@ -901,87 +795,6 @@ body {
   line-height: 1.6;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-/* Each slot keeps its label whatever entry is loaded. The label is the frame,
-   the paragraph is the only thing that changes. */
-.wiki-slot {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2xs);
-}
-
-.wiki-slot__label {
-  font-size: var(--fs-micro);
-  font-weight: 600;
-  line-height: 1.2;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text3);
-}
-
-/* Reserved to the longest entry in the set — three lines for the summary, four
-   for the difference. Costs a little whitespace on the short entries and buys
-   the thing that matters: the dials below never move when the subject changes. */
-.wiki-slot__text {
-  font-size: var(--fs-body-sm);
-  line-height: 1.5;
-  color: var(--text1);
-}
-
-.wiki-slot--summary .wiki-slot__text {
-  min-height: calc(3 * 1.5em);
-}
-
-.wiki-slot--differs .wiki-slot__text {
-  min-height: calc(4 * 1.5em);
-}
-
-/* The dials. Two columns: name on the left, reading on the right, rules
-   between so the eye can run down either column. */
-.wiki-facts {
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--border);
-}
-
-.wiki-fact {
-  display: grid;
-  grid-template-columns: 92px 1fr;
-  gap: var(--space-md);
-  padding: var(--space-sm) 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.wiki-fact:last-child {
-  border-bottom: none;
-}
-
-.wiki-fact dt {
-  font-size: var(--fs-micro);
-  font-weight: 600;
-  line-height: 1.4;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text3);
-}
-
-.wiki-fact dd {
-  font-size: var(--fs-body-sm);
-  line-height: 1.4;
-  color: var(--text1);
-}
-
-.wiki-card__links {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2xs);
-  font-size: var(--fs-caption);
-  line-height: 1.4;
-}
-
-.wiki-card__nolink {
-  color: var(--text3);
 }
 
 /* ── Mode tabs ──────────────────────────────────────────────────
@@ -1450,7 +1263,9 @@ body {
   position: sticky;
   top: var(--chrome-h);
   z-index: 20;
-  margin: calc(var(--space-lg) * -1) calc(var(--content-gutter) * -1) 0;
+  /* Full-bleed sideways only. It sits under the context card now, so there is
+     no content padding above it left to cancel. */
+  margin: 0 calc(var(--content-gutter) * -1);
   padding: var(--space-sm) var(--content-gutter);
   display: flex;
   align-items: center;
@@ -1472,10 +1287,14 @@ body {
   min-width: 0;
 }
 
+/* --text2, like every other micro-label: --text3 is the disabled ink, and at
+   11px against the chrome — dark mode especially — the two ends of the scale
+   were reading as smudges. They are the only two numbers on the strip that
+   say what the colours mean. */
 .colorbar-legend__tick {
   font-size: var(--fs-caption);
   line-height: 1.3;
-  color: var(--text3);
+  color: var(--text2);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1505,6 +1324,210 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ── Context card ───────────────────────────────────────────────
+   The subject of the screen — dataset, model, method — stated above the
+   maps instead of hovered out of an info dot. A container: hairline, no
+   shadow, the full width of what it captions. Copy is left-aligned like
+   everything else; only the paragraph holds a measure. */
+
+.context-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-container);
+  background: var(--surface1);
+  overflow: hidden;
+}
+
+.context-card__tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+
+.context-card__tab {
+  padding: var(--space-2xs) var(--space-md);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text2);
+  transition: background-color var(--t-micro) ease, color var(--t-micro) ease;
+}
+
+.context-card__tab:hover {
+  background: var(--accent-subtle);
+  color: var(--accent-strong);
+}
+
+.context-card__tab.is-on,
+.context-card__tab.is-on:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-accent);
+}
+
+.context-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-lg);
+}
+
+/* Twenty checked methods would push the entry off the card, so the row
+   scrolls at two lines rather than growing. */
+.context-card__picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  max-height: 62px;
+  overflow-y: auto;
+}
+
+/* Name and tags | sentence | control. Wraps to a stack under 720px, where
+   three columns of this would each be too narrow to read. */
+.context-card__lede {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-xl);
+}
+
+.context-card__ident {
+  flex: 0 0 auto;
+  min-width: 180px;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.context-card__title {
+  font-family: var(--font-display);
+  font-size: var(--fs-subheading);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+/* A measure, not a column width: the card is as wide as the page and a
+   65-character line is the point at which prose stops being scannable. */
+.context-card__summary {
+  flex: 1 1 320px;
+  max-width: 68ch;
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+  color: var(--text2);
+}
+
+.context-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+/* Grows the card downwards. The chevron is what says it opens in place
+   rather than sending you somewhere. */
+.context-card__more {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-element);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--accent);
+  white-space: nowrap;
+  transition: background-color var(--t-micro) ease;
+}
+
+.context-card__more:hover {
+  background: var(--accent-subtle);
+}
+
+.context-card__chev {
+  width: 9px;
+  height: 6px;
+  transition: transform var(--t-standard) ease;
+}
+
+.context-card__more[aria-expanded='true'] .context-card__chev {
+  transform: rotate(180deg);
+}
+
+/* ── Expanded entry ─────────────────────────────────────────────
+   The rest of the glossary entry, opened in place. Same slots and the
+   same fixed dials as the reference panel, run across the width. */
+
+.context-card__detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border);
+}
+
+.context-card__slot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.context-card__slot-text {
+  max-width: 68ch;
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+  color: var(--text1);
+}
+
+.context-card__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-sm);
+}
+
+.context-card__fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface2);
+}
+
+.context-card__fact dt {
+  font-size: var(--fs-label);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+
+.context-card__fact dd {
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
+  color: var(--text1);
+  font-variant-numeric: tabular-nums;
+}
+
+.context-card__links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+}
+
+.context-card__nolink {
+  color: var(--text3);
 }
 
 /* ── Model grid ─────────────────────────────────────────────────
@@ -1845,10 +1868,12 @@ body {
 @media (max-width: 760px) {
   :root {
     --sidebar-width: 100%;
-    --sidebar-collapsed-width: 48px;
     /* Zero, not auto: the bars go static here, but calc() still reads these. */
     --topbar-h: 0px;
     --selbar-h: 0px;
+    /* The collapsed rail becomes a bar across the top of the content here, so
+       what sticks under it measures from this instead of the chrome. */
+    --panel-bar-h: 36px;
   }
 
   .topbar {
@@ -1863,13 +1888,24 @@ body {
     margin-right: auto;
   }
 
-  /* Wraps here — four crumbs on one phone-width line would leave nothing but
-     ellipses, and an ellipsis is not a selection you can read. */
+  /* A grid, not a wrapping row. Four crumbs sized to their own content stagger
+     into three ragged rows of three different widths, which reads as debris
+     rather than as a path. One crumb per column, columns equal, and the count
+     drops to one when a phone cannot hold two. */
   .selection-bar {
     position: static;
     height: auto;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: var(--space-xs);
     padding: var(--space-sm) var(--space-md);
+  }
+
+  /* The desktop cap is what keeps a filename from eating the bar; in a column
+     that is already bounded it only makes the grid ragged again. */
+  .crumb__trigger {
+    width: 100%;
+    max-width: none;
   }
 
   .mode-switcher {
@@ -1893,32 +1929,85 @@ body {
     border-bottom: 1px solid var(--border);
   }
 
-  .controls-panel--collapsed {
-    position: fixed;
-    width: var(--sidebar-collapsed-width);
-    height: 100vh;
-    border-right: 1px solid var(--border);
-    border-bottom: none;
+  /* Collapsed, the rail lies down. A 48px column of sideways type spends a
+     tenth of a phone's width on one word and pushes the way back to the
+     methods off the top of the screen; a bar across the content keeps it in
+     the reading order. Sticky, because the thing you want to change methods
+     from is a strip of maps a few screens long. */
+  .viewer-layout--collapsed .controls-panel {
+    position: sticky;
+    top: 0;
+    z-index: 120;
+    width: 100%;
+    height: var(--panel-bar-h);
+    padding: 0;
+    align-items: stretch;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
   }
 
-  .viewer-content {
+  .viewer-layout--collapsed .panel-toggle {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-xs);
+    padding: 0 var(--space-md);
+    border-radius: 0;
+  }
+
+  /* It opens downward here, so the arrow points where the panel will land. */
+  .viewer-layout--collapsed .panel-toggle__icon {
+    display: block;
+    transform: rotate(90deg);
+  }
+
+  .viewer-layout--collapsed .panel-toggle__label {
+    writing-mode: horizontal-tb;
+  }
+
+  .viewer-content,
+  .viewer-layout--collapsed .viewer-content {
     margin-left: 0;
     width: 100%;
   }
 
   /* The sidebar is stacked above the content here, so the render strip is
-     already the top of the scroll region: no offset to clear. */
+     already the top of the scroll region: no offset to clear — except under
+     the collapsed bar, which is holding that spot. */
   .render-bar {
     top: 0;
+  }
+
+  .viewer-layout--collapsed .render-bar {
+    top: var(--panel-bar-h);
   }
 
   .method-filter__list {
     max-height: 240px;
   }
 
-  .viewer-layout--collapsed .viewer-content {
-    margin-left: var(--sidebar-collapsed-width);
-    width: calc(100vw - var(--sidebar-collapsed-width));
+  /* Six readings on a wrapping flex row keep the dividing hairline in front of
+     whichever stat happens to land first on the second row, so nothing lines
+     up under anything. A grid with a declared column count knows which cell
+     starts a row and can drop the rule there. */
+  .stat-rail {
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+
+  .stat-rail__stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-md);
+  }
+
+  .stat-rail__stat {
+    padding-left: var(--space-md);
+  }
+
+  .stat-rail__stat:nth-child(3n + 1) {
+    padding-left: 0;
+    border-left: none;
   }
 
   .compare-header {
@@ -1927,6 +2016,10 @@ body {
 
   .compare-cell--original {
     top: var(--renderbar-h);
+  }
+
+  .viewer-layout--collapsed .compare-cell--original {
+    top: calc(var(--renderbar-h) + var(--panel-bar-h));
   }
 
   .model-grid {

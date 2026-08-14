@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { AtlasMark } from './AtlasMark';
 import { useAtlasFavicon } from './atlas-mark';
 import './App.css';
-import { FACT_KEYS, WIKI_SECTIONS, lookupWiki } from './wiki';
+import { FACT_KEYS, lookupWiki } from './wiki';
 
 const EMPTY_OBJ = {};
 const BASE_URL = import.meta.env.BASE_URL ?? '/';
@@ -12,7 +12,9 @@ const BASE_URL = import.meta.env.BASE_URL ?? '/';
 const OverlayContext = createContext({ enabled: false, opacity: 0.8 });
 const useOverlay = () => useContext(OverlayContext);
 
-// Opening the reference panel is available anywhere a name is shown.
+// Aiming the context card at a subject is available anywhere a name is shown.
+// There is one reference surface on the page and this is how anything else
+// points at it.
 const WikiContext = createContext({ open: () => {} });
 const useWiki = () => useContext(WikiContext);
 
@@ -67,7 +69,7 @@ const METHOD_CATEGORIES = {
   perturbation: {
     label: 'Perturbation',
     methods: [
-      'RISE', 'Occlusion', 'KernelShap', 'Lime', 'FeaturePermutation',
+      'CB-RISE', 'RISE', 'Occlusion', 'KernelShap', 'Lime', 'FeaturePermutation',
       'FeatureAblation', 'ShapleyValueSampling',
     ],
   },
@@ -494,15 +496,28 @@ function RenderBar({ overlay, opacity, onToggle, onOpacity }) {
 
 /* ── Reference layer ────────────────────────────────────────────
    Every model, dataset, method and metric has a glossary entry. The dot
-   shows the one-liner on hover and opens the full entry on click. */
+   shows the one-liner on hover, and on click aims the context card at the
+   top of the page at that entry. On touch, where there is no hover, the
+   first tap stands in for it. */
 
 function InfoDot({ kind, id, label }) {
   const entry = lookupWiki(kind, id);
   const { open } = useWiki();
+  const rootRef = useRef(null);
   const anchorRef = useRef(null);
   const tipRef = useRef(null);
+  const pointer = useRef(null);
   const [anchor, setAnchor] = useState(null);
   const [pos, setPos] = useState(null);
+  // Which input is driving, read off the event rather than off a media query:
+  // a laptop with a touchscreen is both, and what counts is the one in hand.
+  const [byTouch, setByTouch] = useState(false);
+
+  const show = () => {
+    const r = anchorRef.current?.getBoundingClientRect();
+    if (r) setAnchor(r);
+  };
+  const hide = () => { setAnchor(null); setPos(null); };
 
   // Placed after the tip exists, because deciding whether it fits below the dot
   // needs its measured height. useLayoutEffect, so the first painted frame is
@@ -520,21 +535,54 @@ function InfoDot({ kind, id, label }) {
     });
   }, [anchor]);
 
+  // A tip a finger opened has no hover to end it: the next touch anywhere else
+  // closes it, and so does the page moving under it — the position is measured
+  // once, in viewport coordinates, so a scroll would strand it mid-air.
+  useEffect(() => {
+    if (!anchor || !byTouch) return;
+    const away = (e) => { if (!rootRef.current?.contains(e.target)) hide(); };
+    document.addEventListener('pointerdown', away);
+    window.addEventListener('scroll', hide, { passive: true, capture: true });
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      window.removeEventListener('scroll', hide, { capture: true });
+    };
+  }, [anchor, byTouch]);
+
   if (!entry) return null;
 
-  const show = () => {
-    const r = anchorRef.current?.getBoundingClientRect();
-    if (r) setAnchor(r);
+  // Touch has no hover, so the tap that would have hovered is the tap that
+  // opens: the one-liner never gets read. On a finger the first tap shows it
+  // and the second acts on it; a mouse or a keyboard still acts on the first.
+  const act = (e) => {
+    e.stopPropagation();
+    const finger = pointer.current === 'touch' || pointer.current === 'pen';
+    pointer.current = null;
+    if (finger && !anchor) {
+      setByTouch(true);
+      show();
+      return;
+    }
+    hide();
+    setByTouch(false);
+    open(kind, entry.id);
   };
-  const hide = () => { setAnchor(null); setPos(null); };
 
   return (
-    <span className="info-dot" onMouseEnter={show} onMouseLeave={hide}>
+    <span
+      ref={rootRef} className="info-dot"
+      /* Filtered by pointer type rather than left as onMouseEnter: touch fires
+         a compatibility mouseenter before the click, which would open the tip
+         and make the first tap look like the second. */
+      onPointerEnter={(e) => { if (e.pointerType === 'mouse') { setByTouch(false); show(); } }}
+      onPointerLeave={(e) => { if (e.pointerType === 'mouse') hide(); }}
+    >
       <button
         ref={anchorRef} type="button" className="info-dot__btn"
         aria-label={`About ${label ?? entry.title}`}
         onFocus={show} onBlur={hide}
-        onClick={(e) => { e.stopPropagation(); hide(); open(kind, entry.id); }}
+        onPointerDown={(e) => { pointer.current = e.pointerType; }}
+        onClick={act}
       >i</button>
       {/* Portalled to the body. The tip is positioned in viewport coordinates,
           and any transformed ancestor — every image card carries one from its
@@ -548,7 +596,7 @@ function InfoDot({ kind, id, label }) {
           <span className="info-tip__title">{entry.title}</span>
           {entry.tags?.length > 0 && <span className="info-tip__tags">{entry.tags.join(' · ')}</span>}
           <span className="info-tip__summary">{entry.summary}</span>
-          <span className="info-tip__cta">Click for the full entry</span>
+          <span className="info-tip__cta">{byTouch ? 'Tap again to open it at the top' : 'Click to open it at the top'}</span>
         </span>,
         document.body,
       )}
@@ -558,99 +606,142 @@ function InfoDot({ kind, id, label }) {
 
 const factOf = (entry, label) => entry.facts?.find(([k]) => k === label)?.[1] ?? '—';
 
-/* One card with fixed slots, not a document you scroll. Every entry fills the
-   same two lines and the same dials, and the dials are driven by FACT_KEYS
-   rather than by the entry — so switching from ResNet to AlexNet swaps values
-   in place and moves nothing. The labels are the instrument; the text is the
-   reading. */
-function WikiPanel({ target, onClose }) {
-  const [kind, setKind] = useState(target?.kind ?? WIKI_SECTIONS[0].kind);
-  const [id, setId] = useState(target?.id ?? null);
+// Segmentation variants (for example "Lime (SLIC)" and "Lime (KMeans)")
+// share one glossary entry. Keep the real method id for selection, but show
+// only one chip in the reference card.
+function uniqueWikiMethods(methodOptions, activeMethod) {
+  const grouped = new Map();
+  for (const methodId of methodOptions) {
+    const entry = lookupWiki('method', methodId);
+    const key = entry?.id?.toLowerCase() ?? String(methodId).toLowerCase();
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        id: methodId,
+        label: entry?.title ?? methodId,
+      });
+    } else if (methodId === activeMethod) {
+      // Keep the active segmentation as the target if it is not the first
+      // variant in the selected list.
+      existing.id = methodId;
+    }
+  }
+  return [...grouped.values()];
+}
 
-  // Opening the panel on a different subject re-aims it instead of remounting.
-  useEffect(() => {
-    if (!target) return;
-    if (target.kind) setKind(target.kind);
-    setId(target.id ?? null);
-  }, [target]);
+/* The subject of the screen, stated above the maps: what dataset, what model,
+   what method. It replaces the info dots that used to hang off the dataset and
+   model crumbs — the answer is now on the page instead of one hover away, and
+   the dots stay only where there is no room for a card (the method captions).
+   Full-bleed across the content column, like the render strip: it captions
+   everything under it, so it is as wide as what it captions. "Read more" grows
+   the card downwards rather than opening the side panel — the maps below stay
+   in place, they only move down. */
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+const CONTEXT_TABS = [
+  { kind: 'dataset', label: 'Dataset' },
+  { kind: 'model', label: 'Model' },
+  { kind: 'method', label: 'Method' },
+];
 
-  const section = WIKI_SECTIONS.find((s) => s.kind === kind) ?? WIKI_SECTIONS[0];
-  // lookupWiki catches the segmentation variants: "Lime (SLIC)" lands on Lime.
-  const entry = section.entries.find((e) => e.id === id)
-    ?? lookupWiki(section.kind, id)
-    ?? section.entries[0];
+function ContextCard({
+  dataset, model, method, methodOptions = [], onMethod,
+  tab, onTab, expanded, onExpand, hiddenKinds,
+}) {
+  const ids = { dataset, model, method };
+  const wikiMethodOptions = uniqueWikiMethods(methodOptions, method);
+
+  // A tab exists only when its subject is both selectable here and documented —
+  // "Across Models" has no single model, and a dataset with no entry would open
+  // an empty card.
+  const tabs = CONTEXT_TABS.filter((t) =>
+    !hiddenKinds?.includes(t.kind) && lookupWiki(t.kind, ids[t.kind])
+  );
+  if (!tabs.length) return null;
+
+  const active = tabs.find((t) => t.kind === tab) ?? tabs[0];
+  const entry = lookupWiki(active.kind, ids[active.kind]);
 
   return (
-    <>
-      <div className="wiki-scrim" onClick={onClose} />
-      <aside className="wiki-panel" role="dialog" aria-modal="true" aria-label="NeuralAtlas reference">
-        <header className="wiki-panel__head">
-          <span className="panel-header__label">Reference</span>
-          <button type="button" className="wiki-panel__close" onClick={onClose} aria-label="Close reference">&#10005;</button>
-        </header>
+    <section className="context-card" aria-label="Current selection reference">
+      <nav className="context-card__tabs" role="tablist" aria-label="Reference subject">
+        {tabs.map((t) => (
+          <button
+            key={t.kind} type="button" role="tab"
+            aria-selected={t.kind === active.kind}
+            className={`context-card__tab${t.kind === active.kind ? ' is-on' : ''}`}
+            onClick={() => onTab(t.kind)}
+          >{t.label}</button>
+        ))}
+      </nav>
 
-        <nav className="wiki-kinds" aria-label="Reference sections">
-          {WIKI_SECTIONS.map((s) => (
-            <button
-              key={s.kind} type="button"
-              className={`wiki-kind${s.kind === section.kind ? ' is-on' : ''}`}
-              aria-current={s.kind === section.kind ? 'true' : undefined}
-              onClick={() => { setKind(s.kind); setId(s.entries[0].id); }}
-            >{s.label}</button>
-          ))}
-        </nav>
+      <div className="context-card__body">
+        {/* Which method the card is reading. Only when more than one is
+            checked — with a single method the tab label already says it. */}
+        {active.kind === 'method' && wikiMethodOptions.length > 1 && (
+          <div className="context-card__picker">
+            {wikiMethodOptions.map(({ id, label }) => (
+              <button
+                key={label} type="button"
+                className={`wiki-chip${id === method ? ' is-on' : ''}`}
+                onClick={() => onMethod(id)}
+              >{label}</button>
+            ))}
+          </div>
+        )}
 
-        <div className="wiki-picker">
-          {section.entries.map((e) => (
-            <button
-              key={e.id} type="button"
-              className={`wiki-chip${e === entry ? ' is-on' : ''}`}
-              onClick={() => setId(e.id)}
-            >{e.title}</button>
-          ))}
+        {/* Identity on the left, the sentence in the middle, the control on
+            the right — one line across the full width instead of a stack in a
+            narrow column. */}
+        <div className="context-card__lede">
+          <div className="context-card__ident">
+            <h2 className="context-card__title">{entry.title}</h2>
+            <p className="context-card__tags">
+              {entry.tags?.map((t) => <span key={t} className="wiki-tag">{t}</span>)}
+            </p>
+          </div>
+          <p className="context-card__summary">{entry.summary}</p>
+          <button
+            type="button" className="context-card__more"
+            aria-expanded={expanded}
+            onClick={() => onExpand(!expanded)}
+          >
+            {expanded ? 'Show less' : 'Read more'}
+            <svg className="context-card__chev" viewBox="0 0 10 6" aria-hidden="true">
+              <path d="M1 1.5 5 5 9 1.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         </div>
 
-        <article className="wiki-card">
-          <h3 className="wiki-card__title">{entry.title}</h3>
-          <p className="wiki-card__tags">
-            {entry.tags?.map((t) => <span key={t} className="wiki-tag">{t}</span>)}
-          </p>
+        {expanded && (
+          <div className="context-card__detail">
+            <div className="context-card__slot">
+              <span className="context-card__slot-label">What makes it different</span>
+              <p className="context-card__slot-text">{entry.differs}</p>
+            </div>
 
-          <div className="wiki-slot wiki-slot--summary">
-            <span className="wiki-slot__label">What it is</span>
-            <p className="wiki-slot__text">{entry.summary}</p>
+            {/* Same fixed dials as the reference panel, laid out across the
+                width instead of down a rail. */}
+            <dl className="context-card__facts">
+              {FACT_KEYS[active.kind].map((label) => (
+                <div key={label} className="context-card__fact">
+                  <dt>{label}</dt>
+                  <dd>{factOf(entry, label)}</dd>
+                </div>
+              ))}
+            </dl>
+
+            <p className="context-card__links">
+              {entry.links?.length
+                ? entry.links.map((l) => (
+                  <a key={l.href} href={l.href} target="_blank" rel="noreferrer noopener">{l.label}</a>
+                ))
+                : <span className="context-card__nolink">No external source</span>}
+            </p>
           </div>
-
-          <div className="wiki-slot wiki-slot--differs">
-            <span className="wiki-slot__label">What makes it different</span>
-            <p className="wiki-slot__text">{entry.differs}</p>
-          </div>
-
-          <dl className="wiki-facts">
-            {FACT_KEYS[section.kind].map((label) => (
-              <div key={label} className="wiki-fact">
-                <dt>{label}</dt>
-                <dd>{factOf(entry, label)}</dd>
-              </div>
-            ))}
-          </dl>
-
-          <p className="wiki-card__links">
-            {entry.links?.length
-              ? entry.links.map((l) => (
-                <a key={l.href} href={l.href} target="_blank" rel="noreferrer noopener">{l.label}</a>
-              ))
-              : <span className="wiki-card__nolink">No external source</span>}
-          </p>
-        </article>
-      </aside>
-    </>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -840,7 +931,6 @@ function ModelStatsRail({ model, dataset, stats }) {
         <span className="stat-rail__label">Run</span>
         <strong className="stat-rail__run-name">
           {model}<span> / {dataset}</span>
-          <InfoDot kind="model" id={model} label={model} />
         </strong>
       </div>
       <dl className="stat-rail__stats">
@@ -877,7 +967,7 @@ function ModeSwitcher({ value, onChange }) {
 
 // Mode is navigation, not a filter — it belongs in the chrome with the
 // wordmark and the live readout, not stacked on top of the dropdowns.
-function TopBar({ mode, onModeChange, readout, onOpenWiki }) {
+function TopBar({ mode, onModeChange, readout, wikiOn, onToggleWiki }) {
   return (
     <header className="topbar">
       <span className="topbar__brand">
@@ -887,8 +977,10 @@ function TopBar({ mode, onModeChange, readout, onOpenWiki }) {
       <ModeSwitcher value={mode} onChange={onModeChange} />
       <p className="topbar__readout" role="status" aria-live="polite">{readout}</p>
       <button
-        type="button" className="topbar__wiki" onClick={onOpenWiki}
-        title="Reference" aria-label="Open reference"
+        type="button" className={`topbar__wiki${wikiOn ? ' is-on' : ''}`}
+        onClick={onToggleWiki} aria-pressed={wikiOn}
+        title={wikiOn ? 'Hide reference' : 'Show reference'}
+        aria-label={wikiOn ? 'Hide reference' : 'Show reference'}
       >
         {/* An open book, not the word: it sits next to the theme glyph and
             reads as a way out of the page at a glance. */}
@@ -905,7 +997,7 @@ function TopBar({ mode, onModeChange, readout, onOpenWiki }) {
 /* One step of the selection path. Closed it is a label and its current value —
    what is on screen, stated in one line. Open it is the same searchable list
    that used to live in the rail, just brought to where the answer is read. */
-function CrumbSelect({ label, value, items, onSelect, placeholder, disabled, wikiKind }) {
+function CrumbSelect({ label, value, items, onSelect, placeholder, disabled }) {
   const inputId = useId();
   const list = (items ?? []).map((i) => typeof i === 'string' ? { value: i, label: i } : i);
   const selectedLabel = value == null ? '' : list.find((i) => i.value === value)?.label ?? String(value);
@@ -954,7 +1046,6 @@ function CrumbSelect({ label, value, items, onSelect, placeholder, disabled, wik
           </svg>
         </span>
       </button>
-      {wikiKind && <InfoDot kind={wikiKind} id={value} label={selectedLabel || label} />}
       {open && !disabled && (
         <div className="crumb__pop">
           <input
@@ -1063,10 +1154,7 @@ function ClassCompareView({ matrix, methods, ready, labels }) {
       <div className="compare-header" style={style}>
         <div className="compare-header__cell compare-header__cell--original">Original</div>
         {matrix.models.map((m) => (
-          <div key={m} className="compare-header__cell">
-            {m}
-            <InfoDot kind="model" id={m} label={m} />
-          </div>
+          <div key={m} className="compare-header__cell">{m}</div>
         ))}
       </div>
       {matrix.rows.map((row) => {
@@ -1111,8 +1199,6 @@ function ModelForm({ outputStructure }) {
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [overlay, setOverlay] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(0.8);
-  const [wikiTarget, setWikiTarget] = useState(null);
-  const wikiApi = useMemo(() => ({ open: (kind, id) => setWikiTarget({ kind, id }) }), []);
   const [imgCache, setImgCache] = useState({});
   const [lblCache, setLblCache] = useState({});
   const [dsStatus, setDsStatus] = useState({});
@@ -1216,6 +1302,47 @@ function ModelForm({ outputStructure }) {
     return availableMethods.filter((m) => wanted.has(m));
   }, [vs.methods, availableMethods]);
 
+  // The context card is the only reference surface on the page, so its state
+  // lives here: which subject it reads, whether the full entry is open, and
+  // whether it is on screen at all (the book in the top bar).
+  const [contextTab, setContextTab] = useState('model');
+  const [contextOpen, setContextOpen] = useState(false);
+  const [contextShown, setContextShown] = useState(true);
+  const [pickedMethod, setPickedMethod] = useState(null);
+  // A method named from the sidebar may not be checked, so it is enough that
+  // it be documented — otherwise fall back to the first one on screen.
+  const contextMethod = pickedMethod && lookupWiki('method', pickedMethod)
+    ? pickedMethod
+    : selectedMethods[0] ?? null;
+
+  // Anything that names a subject — an info dot on a method caption, a
+  // checkbox in the rail — aims the card at it and opens the full entry.
+  const wikiApi = useMemo(() => ({
+    open: (kind, id) => {
+      setContextShown(true);
+      setContextOpen(true);
+      if (kind) setContextTab(kind);
+      if (kind === 'method' && id) setPickedMethod(id);
+    },
+  }), []);
+
+  // Without a nudge the card would keep reading whatever was last opened while
+  // the selection moved on underneath it, so it follows the last thing touched.
+  // Checking a whole family at once is left alone — twenty added methods name
+  // no single subject.
+  const lastSelection = useRef({ model: null, dataset: null, methods: [] });
+  useEffect(() => {
+    const prev = lastSelection.current;
+    lastSelection.current = { model: effectiveModel, dataset: effectiveDataset, methods: selectedMethods };
+    if (prev.model == null && prev.dataset == null) return; // first pass, nothing was touched
+    if (effectiveModel !== prev.model) setContextTab('model');
+    else if (effectiveDataset !== prev.dataset) { setContextTab('dataset'); setPickedMethod(null); }
+    else {
+      const added = selectedMethods.filter((m) => !prev.methods.includes(m));
+      if (added.length === 1) { setContextTab('method'); setPickedMethod(added[0]); }
+    }
+  }, [effectiveModel, effectiveDataset, selectedMethods]);
+
   const setSelectedMethods = (list) => {
     const next = availableMethods.filter((m) => list.includes(m));
     patch({ methods: next.length === availableMethods.length ? null : next.join(',') });
@@ -1297,12 +1424,12 @@ function ModelForm({ outputStructure }) {
     <WikiContext.Provider value={wikiApi}>
     <TopBar
       mode={vs.mode} onModeChange={handleModeChange} readout={summaryText}
-      onOpenWiki={() => setWikiTarget({ kind: null, id: null })}
+      wikiOn={contextShown} onToggleWiki={() => setContextShown((v) => !v)}
     />
     <SelectionBar>
       {vs.mode !== 'class_compare' && (
         <CrumbSelect
-          label="Model" value={effectiveModel} items={modelOptions} wikiKind="model"
+          label="Model" value={effectiveModel} items={modelOptions}
           onSelect={(v) => patch({ model: v, classId: null, imageId: null })}
           placeholder="Search model" disabled={!modelOptions.length}
         />
@@ -1310,7 +1437,7 @@ function ModelForm({ outputStructure }) {
 
       <CrumbSelect
         label="Dataset" value={effectiveDataset}
-        items={datasetOptions} wikiKind="dataset"
+        items={datasetOptions}
         onSelect={(v) => patch({ dataset: v })}
         placeholder="Search dataset"
         disabled={!datasetOptions.length}
@@ -1354,6 +1481,19 @@ function ModelForm({ outputStructure }) {
       </aside>
 
       <main className="viewer-content">
+        {/* The card names what is on screen; the render strip sets how it is
+            drawn. Reading order follows: subject first, then controls, then
+            the maps they act on. */}
+        {contextShown && (
+          <ContextCard
+            dataset={effectiveDataset} model={effectiveModel} method={contextMethod}
+            methodOptions={selectedMethods} onMethod={setPickedMethod}
+            tab={contextTab} onTab={setContextTab}
+            expanded={contextOpen} onExpand={setContextOpen}
+            hiddenKinds={vs.mode === 'class_compare' ? ['model'] : undefined}
+          />
+        )}
+
         <RenderBar
           overlay={overlay} opacity={overlayOpacity}
           onToggle={() => setOverlay((v) => !v)} onOpacity={setOverlayOpacity}
@@ -1373,7 +1513,6 @@ function ModelForm({ outputStructure }) {
         )}
       </main>
     </div>
-    {wikiTarget && <WikiPanel target={wikiTarget} onClose={() => setWikiTarget(null)} />}
     </WikiContext.Provider>
     </OverlayContext.Provider>
   );
