@@ -31,6 +31,14 @@ def parse_args() -> argparse.Namespace:
         help=f"Torchvision model name (default: {config.DEFAULT_MODEL_NAME}).",
     )
     parser.add_argument(
+        "--dataset",
+        default=config.DATASET_NAME,
+        help=(
+            "Dataset directory name under interpretability-viewer/public "
+            f"(default: {config.DATASET_NAME})."
+        ),
+    )
+    parser.add_argument(
         "--num-samples",
         type=int,
         default=config.DEFAULT_NUM_SAMPLES,

@@ -18,6 +18,13 @@ Python version are pinned in `pyproject.toml` / `uv.lock` / `.python-version`
    uv run python main.py --help
    ```
 
+   The default dataset is `imagenet-pico-ai`. You can select another dataset
+   directory under `interpretability-viewer/public/` with `--dataset`:
+
+   ```bash
+   uv run python main.py --dataset imagenet-pico --num-samples 20
+   ```
+
 The paired AI dataset generation feature lives in the backend and can be run with:
 
 ```bash
