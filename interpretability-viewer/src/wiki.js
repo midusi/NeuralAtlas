@@ -329,7 +329,7 @@ export const WIKI_SECTIONS = [
           ['Family', 'Perturbation, Monte Carlo'],
           ['Needs', 'Up to 4096 masked forward passes, with early stopping'],
           ['Cost', 'Slow, but convergence-aware'],
-          ['Resolution', '4x4 random masks, bilinearly upsampled'],
+          ['Resolution', '7x7 random masks, bilinearly upsampled'],
           ['Limit', 'Runtime and detail depend on the convergence and mask settings'],
         ],
         links: [

@@ -125,6 +125,7 @@ def _make_superpixel_runtime_kwargs(mask_fn: Callable[..., object], **seg_kwargs
 
 def method_catalog() -> list[MethodCatalogEntry]:
     base_entries = [
+        MethodCatalogEntry("CB-RISE", "CB-RISE", "perturbation"),
         MethodCatalogEntry("RISE", "RISE", "perturbation"),
         MethodCatalogEntry("Occlusion", "Occlusion", "perturbation"),
         MethodCatalogEntry("GuidedGradCam", "GuidedGradCam", "gradient", True),
@@ -179,6 +180,7 @@ def build_interp_methods(
     )
     from skimage.segmentation import quickshift, slic
 
+    from backend.cb_rise import CBRISE
     from backend.rise import RISE
 
     slic_medium = _make_superpixel_runtime_kwargs(
@@ -203,6 +205,19 @@ def build_interp_methods(
     )
 
     return [
+        AttributionConfig(
+            CBRISE,
+            name="CB-RISE",
+            n_masks=4096,
+            grid_size=7,
+            probability=0.5,
+            mask_batch_size=32,
+            sigma=10.0,
+            patience=64,
+            epsilon=1e-3,
+            threshold=0.3,
+            seed=0,
+        ),
         AttributionConfig(
             RISE,
             n_masks=2048,
