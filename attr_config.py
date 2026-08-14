@@ -17,12 +17,14 @@ class AttributionConfig:
         attribution_class: type[Attribution],
         callback: _Callback | None = None,
         runtime_kwargs_fn: _RuntimeKwargsFn | None = None,
+        name: str | None = None,
         suffix: str | None = None,
         **kwargs: Any,
     ) -> None:
         self.attribution_class = attribution_class
         self.config = kwargs
         self.callback: _Callback = callback if callback is not None else cast(_Callback, lambda x: x)
+        self.name = name
         self.suffix = suffix
         self.runtime_kwargs_fn = runtime_kwargs_fn
         self.layer = self.config.pop("layer", None)
@@ -64,7 +66,7 @@ class AttributionConfig:
 
     def __str__(self) -> str:
         suffix = f" {self.suffix}" if self.suffix else ""
-        return f"{self.attribution_class.__name__}{suffix}"
+        return f"{self.name or self.attribution_class.__name__}{suffix}"
 
     def __repr__(self) -> str:
-        return f"AttributionConfig(attribution_class={self.attribution_class}, config={self.config}, suffix={self.suffix})"
+        return f"AttributionConfig(attribution_class={self.attribution_class}, config={self.config}, name={self.name}, suffix={self.suffix})"

@@ -13,10 +13,17 @@ from backend.pipeline.atlas import AtlasRunner
 
 def run_generation(args: Namespace) -> None:
     args.image_ext = args.image_ext.lstrip(".").lower()
+    dataset_name = args.dataset.strip()
+    if not dataset_name:
+        raise SystemExit("--dataset must not be empty.")
     if args.num_samples <= 0:
         raise SystemExit("--num-samples must be a positive integer.")
     if args.export_batch_images <= 0:
         raise SystemExit("--export-batch-images must be a positive integer.")
+
+    dataset_dir = config.BASE_PUBLIC_DIR / dataset_name / "val"
+    if not dataset_dir.is_dir():
+        raise SystemExit(f"Dataset directory not found: {dataset_dir}")
 
     torch.manual_seed(0)
     runtime = build_model_runtime(args.model)
@@ -39,13 +46,13 @@ def run_generation(args: Namespace) -> None:
     if args.prune_stale_images:
         removed_json_entries, removed_files = repository.prune_stale_artifacts(
             args.model,
-            config.DATASET_NAME,
+            dataset_name,
             args.image_ext,
         )
         print(
             "Pruned stale outputs: "
             f"{removed_files} files, {removed_json_entries} JSON entries."
-            f" (model={args.model}, dataset={config.DATASET_NAME}, ext={args.image_ext})"
+            f" (model={args.model}, dataset={dataset_name}, ext={args.image_ext})"
         )
 
     interp_methods = build_interp_methods(
@@ -59,7 +66,7 @@ def run_generation(args: Namespace) -> None:
             method_name = str(method)
             existing_count = repository.count_method_outputs(
                 args.model,
-                config.DATASET_NAME,
+                dataset_name,
                 method_name,
                 args.image_ext,
             )
@@ -76,7 +83,7 @@ def run_generation(args: Namespace) -> None:
 
     atlas = AtlasRunner(
         runtime.model,
-        str(config.BASE_PUBLIC_DIR / config.DATASET_NAME / "val"),
+        str(dataset_dir),
         interp_methods,
         transform=runtime.transform,
     )
@@ -86,14 +93,14 @@ def run_generation(args: Namespace) -> None:
         num_samples=args.num_samples,
         output_dir=config.OUTPUT_IMAGES_DIR,
         model_name=args.model,
-        dataset_name=config.DATASET_NAME,
+        dataset_name=dataset_name,
         image_ext=args.image_ext,
         metrics=set(args.metrics),
     ):
         buffer.append(record)
         if len(buffer) >= args.export_batch_images:
-            repository.upsert_image_records(args.model, config.DATASET_NAME, buffer)
+            repository.upsert_image_records(args.model, dataset_name, buffer)
             buffer.clear()
 
     if buffer:
-        repository.upsert_image_records(args.model, config.DATASET_NAME, buffer)
+        repository.upsert_image_records(args.model, dataset_name, buffer)

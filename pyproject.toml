@@ -1,0 +1,28 @@
+[project]
+name = "neuralatlas"
+version = "0.1.0"
+description = "Generate attribution maps for image classification models and serve them through a React viewer."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "torchvision",
+    "captum",
+    "tqdm",
+    "matplotlib",
+    "Pillow",
+    "scikit-image",
+    "scikit-learn",
+    "numpy",
+]
+
+[project.scripts]
+neuralatlas = "backend.cli:main"
+neuralatlas-ai-dataset = "backend.ai_dataset.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]

@@ -16,6 +16,7 @@ Module layout:
 - ``core``       data shapes, role ABCs, prompt/schema, shared IO helpers
 - ``gemini``     Gemini captioner + image generator
 - ``cloudflare`` Cloudflare Workers AI image generator
+- ``codex``      Codex CLI image generator
 - ``generator``  the paired-generation orchestration loop
 - ``cli``        argument parsing, provider registry, ``main``
 """

@@ -123,6 +123,7 @@ class AttributionRenderer:
     def _normalize_absolute_heatmap(self, attr: torch.Tensor, outlier_perc: float) -> np.ndarray:
         attr_np = attr.permute(1, 2, 0).detach().cpu().numpy()
         attr_combined = np.abs(np.sum(attr_np, axis=-1))
+        attr_combined -= attr_combined.min()
         threshold = self._cumulative_sum_threshold(
             attr_combined,
             100.0 - outlier_perc,
