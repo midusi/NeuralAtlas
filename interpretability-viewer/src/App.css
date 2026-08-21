@@ -1665,9 +1665,10 @@ body {
 
 .compare-matrix {
   gap: var(--space-lg);
-  /* Wide enough for INTEGRATED GRADIENTS on two lines, narrow enough that it
-     does not read as a column of its own. */
-  --compare-gutter: 124px;
+  /* A y-axis label, not a column of text. Rotated it needs the width of one
+     line, and the ~96px it used to hold go back to the model columns — which
+     is the scarce axis here, one more column per model checked. */
+  --compare-gutter: 28px;
 }
 
 .compare-header,
@@ -1745,10 +1746,15 @@ body {
 .compare-row__method {
   grid-column: 1;
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: var(--space-xs);
   min-width: 0;
-  padding-top: 2px;
+  /* Centred against the band it names, the way an axis label sits against its
+     axis: the grid row is as tall as the maps, not as tall as this. */
+  align-self: center;
+  max-height: 100%;
   font-size: var(--fs-label);
   font-weight: 600;
   line-height: 1.25;
@@ -1757,9 +1763,22 @@ body {
   color: var(--text2);
 }
 
+/* Bottom-to-top, like the ylabel of a figure. Never wrapped: a second line
+   would widen the gutter back out, and the whole point is that it doesn't. */
 .compare-row__method-name {
-  min-width: 0;
-  overflow-wrap: anywhere;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  min-height: 0;
+  max-height: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Upright, and above the label rather than after it: a rotated hit target
+   reads as a mistake, and this is the one thing in the gutter you click. */
+.compare-row__method .info-dot {
+  order: -1;
 }
 
 .compare-row__empty {
@@ -2056,10 +2075,6 @@ body {
     grid-template-columns: var(--compare-gutter) repeat(var(--compare-columns, 1), minmax(200px, 1fr));
     gap: var(--space-md);
   }
-
-  .compare-matrix {
-    --compare-gutter: 104px;
-  }
 }
 
 @media (max-width: 760px) {
@@ -2290,9 +2305,28 @@ body {
     display: none;
   }
 
+  /* One column, so the label is a section heading over its maps again — and a
+     heading is read across, not up. */
   .compare-row__method {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: flex-start;
+    align-self: auto;
+    max-height: none;
     padding-top: var(--space-xs);
     border-top: 1px solid var(--border);
+  }
+
+  .compare-row__method-name {
+    writing-mode: horizontal-tb;
+    transform: none;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+  }
+
+  .compare-row__method .info-dot {
+    order: 0;
   }
 
   .compare-row__empty {
