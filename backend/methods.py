@@ -103,22 +103,31 @@ def kmeans_superpixels(
 
 
 def _make_superpixel_runtime_kwargs(mask_fn: Callable[..., object], **seg_kwargs: object):
+    cached_inputs: torch.Tensor | None = None
+    cached_mask: torch.Tensor | None = None
+
     def _runtime_kwargs(
         inputs: "TensorOrTupleOfTensorsGeneric", _target: object
     ) -> dict[str, "torch.Tensor"]:
+        nonlocal cached_inputs, cached_mask
         inputs_tensor = inputs[0] if isinstance(inputs, tuple) else inputs
         if not isinstance(inputs_tensor, torch.Tensor):
             raise TypeError(
                 "Lime runtime kwargs expected tensor inputs or tuple[Tensor, ...], "
                 f"got {type(inputs_tensor)}."
             )
-        return {
-            "feature_mask": make_superpixel_mask(
+
+        if inputs_tensor is not cached_inputs:
+            cached_mask = make_superpixel_mask(
                 mask_function=mask_fn,
                 img=inputs_tensor,
                 **seg_kwargs,
             )
-        }
+            cached_inputs = inputs_tensor
+
+        if cached_mask is None:
+            raise RuntimeError("Superpixel mask cache was not initialized.")
+        return {"feature_mask": cached_mask}
 
     return _runtime_kwargs
 
@@ -184,13 +193,13 @@ def build_interp_methods(
 
     slic_medium = _make_superpixel_runtime_kwargs(
         slic,
-        n_segments=100,
+        n_segments=32,
         compactness=10.0,
         start_label=0,
     )
     kmeans_medium = _make_superpixel_runtime_kwargs(
         kmeans_superpixels,
-        n_clusters=16,
+        n_clusters=32,
         add_xy=True,
         xy_weight=0.2,
         random_state=0,
@@ -227,9 +236,9 @@ def build_interp_methods(
         AttributionConfig(GuidedGradCam, layer=last_conv_layer),
         AttributionConfig(
             GradientShap,
-            n_samples=50,
-            stdevs=0.0001,
-            baselines=torch.ones(1, 3, 224, 224, device=device),
+            n_samples=100,
+            stdevs=0.05,
+            baselines=torch.zeros(1, 3, 224, 224, device=device),
         ),
         AttributionConfig(Saliency),
         AttributionConfig(IntegratedGradients, n_steps=50),
@@ -245,7 +254,7 @@ def build_interp_methods(
         ),
         AttributionConfig(
             DeepLift,
-            baselines=torch.ones(1, 3, 224, 224, device=device),
+            baselines=torch.zeros(1, 3, 224, 224, device=device),
         ),
         AttributionConfig(GuidedBackprop),
         AttributionConfig(InputXGradient),
@@ -253,35 +262,35 @@ def build_interp_methods(
         AttributionConfig(
             Lime,
             runtime_kwargs_fn=slic_medium,
-            n_samples=300,
+            n_samples=500,
             perturbations_per_eval=32,
             suffix="(SLIC)",
         ),
         AttributionConfig(
             Lime,
             runtime_kwargs_fn=kmeans_medium,
-            n_samples=300,
+            n_samples=500,
             perturbations_per_eval=32,
             suffix="(KMeans)",
         ),
         AttributionConfig(
             KernelShap,
             runtime_kwargs_fn=slic_medium,
-            n_samples=300,
+            n_samples=500,
             perturbations_per_eval=32,
             suffix="(SLIC)",
         ),
         AttributionConfig(
             KernelShap,
             runtime_kwargs_fn=kmeans_medium,
-            n_samples=300,
+            n_samples=500,
             perturbations_per_eval=32,
             suffix="(KMeans)",
         ),
         AttributionConfig(
             LayerIntegratedGradients,
             layer=last_conv_layer,
-            baselines=torch.ones(1, 3, 224, 224, device=device),
+            baselines=torch.zeros(1, 3, 224, 224, device=device),
             n_steps=50,
             attribute_to_layer_input=False,
             callback=to_rgb_heatmap,
