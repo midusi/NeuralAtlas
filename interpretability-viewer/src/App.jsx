@@ -18,7 +18,7 @@ const useOverlay = () => useContext(OverlayContext);
 const WikiContext = createContext({ open: () => {} });
 const useWiki = () => useContext(WikiContext);
 
-const VS_KEYS = ['mode', 'model', 'dataset', 'classId', 'imageId', 'methods'];
+const VS_KEYS = ['mode', 'model', 'dataset', 'classId', 'imageId', 'methods', 'models'];
 
 function readStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -79,6 +79,46 @@ const METHOD_CATEGORIES = {
     ],
   },
 };
+
+/* Torchvision names carry their family as a prefix, so the rail can group
+   twelve models the way it groups methods: one checkbox for all the ResNets.
+   Order here is the order on screen — architectural lineage, not alphabet. */
+const MODEL_FAMILIES = [
+  { key: 'alexnet', label: 'AlexNet', prefixes: ['alexnet'] },
+  { key: 'vgg', label: 'VGG', prefixes: ['vgg'] },
+  { key: 'inception', label: 'Inception', prefixes: ['inception', 'googlenet'] },
+  { key: 'resnet', label: 'ResNet', prefixes: ['resnet', 'resnext', 'wide_resnet'] },
+  { key: 'densenet', label: 'DenseNet', prefixes: ['densenet'] },
+  { key: 'mobilenet', label: 'MobileNet', prefixes: ['mobilenet'] },
+  { key: 'efficientnet', label: 'EfficientNet', prefixes: ['efficientnet'] },
+  { key: 'regnet', label: 'RegNet', prefixes: ['regnet'] },
+  { key: 'convnext', label: 'ConvNeXt', prefixes: ['convnext'] },
+  { key: 'vit', label: 'ViT', prefixes: ['vit_', 'vit'] },
+  { key: 'swin', label: 'Swin', prefixes: ['swin'] },
+];
+
+function categorizeModel(name) {
+  const norm = normalize(name);
+  return MODEL_FAMILIES.find((f) => f.prefixes.some((p) => norm.startsWith(p)))?.key ?? 'other';
+}
+
+// Within a family, resnet18 before resnet101: the depth suffix is a number,
+// and a plain string sort would read it as text and put 101 first.
+function compareModelNames(a, b) {
+  const [an, bn] = [a, b].map((v) => Number(String(v).match(/\d+/)?.[0] ?? NaN));
+  if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn;
+  return String(a).localeCompare(String(b));
+}
+
+// Groups for the rail, in family order, skipping families this dataset has no
+// run for. Same shape FacetFilter takes for methods, so one component serves both.
+function groupModels(models) {
+  const grouped = {};
+  for (const m of models) (grouped[categorizeModel(m)] ??= []).push(m);
+  return [...MODEL_FAMILIES, { key: 'other', label: 'Other' }]
+    .filter((f) => grouped[f.key]?.length)
+    .map((f) => ({ key: f.key, label: f.label, methods: grouped[f.key].sort(compareModelNames) }));
+}
 
 function normalize(v) {
   return String(v ?? '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim();
@@ -231,11 +271,17 @@ function buildImageRecords(outputStructure, imgCache, lblCache) {
   );
 }
 
-function getClassCompareMatrix(records, { dataset, classId }) {
+// `models` is an allow-list: the columns the rail left checked. Rows are built
+// from those records only, so hiding a model that had an image the others lack
+// drops the row with it instead of leaving a line of empty cells.
+function getClassCompareMatrix(records, { dataset, classId, models: allowed }) {
   if (!dataset || !classId) return { models: [], rows: [] };
 
-  const scoped = records.filter((r) => r.dataset === dataset && r.classId === classId);
-  const models = [...new Set(scoped.map((r) => r.model))].sort();
+  const allow = allowed ? new Set(allowed) : null;
+  const scoped = records.filter((r) =>
+    r.dataset === dataset && r.classId === classId && (!allow || allow.has(r.model))
+  );
+  const models = [...new Set(scoped.map((r) => r.model))].sort(compareModelNames);
 
   const byImage = new Map();
   for (const r of scoped) {
@@ -775,9 +821,11 @@ function ContextCard({
   );
 }
 
-/* ── Method filter ──────────────────────────────────────────────
+/* ── Facet filter ───────────────────────────────────────────────
    Checkboxes, not a single-choice dropdown: the useful question is
-   almost always "these four, without that one". */
+   almost always "these four, without that one". One component serves
+   both facets — methods grouped by family, models grouped by
+   architecture — because the question is identical in both. */
 
 // `indeterminate` is a DOM property with no HTML attribute, so it can only be
 // set imperatively.
@@ -787,7 +835,31 @@ function TriCheckbox({ checked, indeterminate, ...rest }) {
   return <input ref={ref} type="checkbox" checked={checked} {...rest} />;
 }
 
-function MethodFilter({ groups, selected, onChange, disabled, onCollapse }) {
+/* Two facets, one rail. Tabs instead of a second stacked list: the panel keeps
+   one height, and the count on the idle tab reports its state without opening
+   it. Only shown when there is a second facet to reach — see ControlsPanel. */
+function RailTabs({ items, value, onChange }) {
+  return (
+    <div className="rail-tabs" role="tablist" aria-label="Filter facet">
+      {items.map((item) => (
+        <button
+          key={item.value} type="button" role="tab"
+          aria-selected={value === item.value}
+          className={`rail-tabs__tab${value === item.value ? ' rail-tabs__tab--active' : ''}`}
+          onClick={() => onChange(item.value)}
+        >
+          {item.label}
+          <span className="rail-tabs__count">{item.selected}/{item.total}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FacetFilter({
+  groups, selected, onChange, disabled, onCollapse,
+  label = 'Methods', noun = 'method', wikiKind = 'method', emptyText, tabs = null,
+}) {
   const [query, setQuery] = useState('');
   const all = useMemo(() => groups.flatMap((g) => g.methods), [groups]);
   const chosen = useMemo(() => new Set(selected), [selected]);
@@ -810,54 +882,65 @@ function MethodFilter({ groups, selected, onChange, disabled, onCollapse }) {
   };
 
   return (
-    <div className="method-filter">
-      <div className="method-filter__head">
-        <span className="tiny-form__label">Methods</span>
-        <span className="method-filter__count">{selected.length}/{all.length}</span>
+    <div className="facet-filter">
+      <div className="facet-filter__head">
+        {/* The tabs carry the facet's name and count, so the plain label only
+            appears when this is the only list in the rail. */}
+        {tabs ?? (
+          <>
+            <span className="tiny-form__label">{label}</span>
+            <span className="facet-filter__count">{selected.length}/{all.length}</span>
+          </>
+        )}
         {onCollapse && (
           <button type="button" className="panel-collapse-btn" onClick={onCollapse} title="Collapse panel">&#8592;</button>
         )}
       </div>
 
       {disabled || all.length === 0 ? (
-        <p className="status-message">Choose a dataset to list its methods.</p>
+        <p className="status-message">{emptyText ?? `Choose a dataset to list its ${noun}s.`}</p>
       ) : (
         <>
           <input
-            className="combo__input" value={query} placeholder="Filter methods"
+            className="combo__input" value={query} placeholder={`Filter ${noun}s`}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <div className="method-filter__actions">
+          <div className="facet-filter__actions">
             <button type="button" onClick={() => onChange(all)}>All</button>
             <button type="button" onClick={() => onChange([])}>None</button>
           </div>
-          <div className="method-filter__list">
+          <div className="facet-filter__list">
             {visible.length === 0 && <p className="combo__empty">No matches — try a shorter query.</p>}
             {visible.map((group) => {
               const allOn = group.methods.every((m) => chosen.has(m));
+              // A family with one member whose name is the family name would
+              // print itself twice — ALEXNET over alexnet. The row alone says it.
+              const sameName = group.methods.length === 1 && normalize(group.methods[0]) === normalize(group.label);
               return (
-                <div key={group.key} className="method-filter__group">
+                <div key={group.key} className="facet-filter__group">
                   {/* One checkbox for the whole family. Partly-checked shows
                       the dash, so the group's state is readable at a glance
                       without counting its children. */}
-                  <label className="method-filter__group-head">
+                  {!sameName && (
+                  <label className="facet-filter__group-head">
                     <TriCheckbox
                       checked={allOn}
                       indeterminate={!allOn && group.methods.some((m) => chosen.has(m))}
                       onChange={() => toggleGroup(group.methods, !allOn)}
-                      aria-label={`All ${group.label} methods`}
+                      aria-label={`All ${group.label} ${noun}s`}
                     />
-                    <span className="method-filter__group-label">{group.label}</span>
+                    <span className="facet-filter__group-label">{group.label}</span>
                   </label>
+                  )}
                   {/* The info dot sits outside the <label>, or clicking it
                       would toggle the checkbox on the way through. */}
                   {group.methods.map((m) => (
-                    <div key={m} className="method-check">
-                      <label className="method-check__label">
+                    <div key={m} className="facet-check">
+                      <label className="facet-check__label">
                         <input type="checkbox" checked={chosen.has(m)} onChange={() => toggle(m)} />
-                        <span className="method-check__name">{m}</span>
+                        <span className="facet-check__name">{m}</span>
                       </label>
-                      <InfoDot kind="method" id={m} label={m} />
+                      <InfoDot kind={wikiKind} id={m} label={m} />
                     </div>
                   ))}
                 </div>
@@ -1175,7 +1258,7 @@ function ModelGridView({ records, methods, ready, labels }) {
   );
 }
 
-function ClassCompareView({ matrix, methods, ready, labels }) {
+function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalModels }) {
   const rowRefs = useRef([]);
   const activeRowRef = useRef(null);
 
@@ -1230,6 +1313,7 @@ function ClassCompareView({ matrix, methods, ready, labels }) {
   }, [matrix.rows]);
 
   if (!ready) return <EmptyState title="Choose dataset and class" description="Pick a dataset and class to align the same image IDs across models." />;
+  if (totalModels > 0 && !matrix.models.length) return <EmptyState title="No models checked" description="Check at least one model in the rail to raise a column." />;
   if (!matrix.rows.length) return <EmptyState title="No aligned rows found" description="No images are available for this class across the selected models." />;
 
   const style = { '--compare-columns': matrix.models.length + 1 };
@@ -1238,7 +1322,20 @@ function ClassCompareView({ matrix, methods, ready, labels }) {
       <div className="compare-header" style={style}>
         <div className="compare-header__cell compare-header__cell--original">Original</div>
         {matrix.models.map((m) => (
-          <div key={m} className="compare-header__cell">{m}</div>
+          <div key={m} className="compare-header__cell">
+            <span className="compare-header__name">{m}</span>
+            <InfoDot kind="model" id={m} label={m} />
+            {/* Dropping a column is a thought you have while reading the
+                column, so the control lives on it. Same act as unchecking it
+                in the rail; it appears on hover and never shifts the header. */}
+            {onHideModel && (
+              <button
+                type="button" className="compare-header__hide"
+                onClick={() => onHideModel(m)}
+                title={`Hide ${m}`} aria-label={`Hide ${m} column`}
+              >&#215;</button>
+            )}
+          </div>
         ))}
       </div>
       {matrix.rows.map((row, rowIndex) => {
@@ -1302,6 +1399,7 @@ function ModelForm({ outputStructure }) {
     ...readStateFromUrl(),
   }));
   const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [facet, setFacet] = useState('method');
   const [overlay, setOverlay] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(0.8);
   const [imgCache, setImgCache] = useState({});
@@ -1400,6 +1498,19 @@ function ModelForm({ outputStructure }) {
 
   const availableMethods = useMemo(() => methodGroups.flatMap((g) => g.methods), [methodGroups]);
 
+  // Every model with a run for this dataset and class — the full set of columns
+  // the compare view could raise, before the rail has its say.
+  const modelGroups = useMemo(() => {
+    if (!effectiveDataset || !effectiveClassId) return [];
+    const names = new Set();
+    for (const r of imageRecords) {
+      if (r.dataset === effectiveDataset && r.classId === effectiveClassId) names.add(r.model);
+    }
+    return groupModels([...names]);
+  }, [imageRecords, effectiveDataset, effectiveClassId]);
+
+  const availableModels = useMemo(() => modelGroups.flatMap((g) => g.methods), [modelGroups]);
+
   // Absent from the URL means "all of them", so a link keeps working when the
   // dataset gains a method. An explicit list is intersected with what exists.
   const selectedMethods = useMemo(() => {
@@ -1407,6 +1518,14 @@ function ModelForm({ outputStructure }) {
     const wanted = new Set(vs.methods.split(',').filter(Boolean));
     return availableMethods.filter((m) => wanted.has(m));
   }, [vs.methods, availableMethods]);
+
+  // Same convention as methods: absent from the URL means "all of them", so a
+  // shared link keeps working after the sweep adds convnext.
+  const selectedModels = useMemo(() => {
+    if (vs.models == null) return availableModels;
+    const wanted = new Set(vs.models.split(',').filter(Boolean));
+    return availableModels.filter((m) => wanted.has(m));
+  }, [vs.models, availableModels]);
 
   // The context card is the only reference surface on the page, so its state
   // lives here: which subject it reads, whether the full entry is open, and
@@ -1454,6 +1573,11 @@ function ModelForm({ outputStructure }) {
     patch({ methods: next.length === availableMethods.length ? null : next.join(',') });
   };
 
+  const setSelectedModels = (list) => {
+    const next = availableModels.filter((m) => list.includes(m));
+    patch({ models: next.length === availableModels.length ? null : next.join(',') });
+  };
+
   const singleImageData = useMemo(() => {
     if (vs.mode !== 'single' || !effectiveModel || !effectiveDataset || !effectiveClassId || !effectiveImageId) return null;
     const r = imageRecords.find((i) =>
@@ -1478,8 +1602,10 @@ function ModelForm({ outputStructure }) {
   }, [imageRecords, effectiveModel, effectiveDataset, effectiveClassId]);
 
   const classCompareMatrix = useMemo(
-    () => getClassCompareMatrix(imageRecords, { dataset: effectiveDataset, classId: effectiveClassId }),
-    [imageRecords, effectiveDataset, effectiveClassId]
+    () => getClassCompareMatrix(imageRecords, {
+      dataset: effectiveDataset, classId: effectiveClassId, models: selectedModels,
+    }),
+    [imageRecords, effectiveDataset, effectiveClassId, selectedModels]
   );
 
   const selectedModelStats = effectiveModel && effectiveDataset
@@ -1522,8 +1648,25 @@ function ModelForm({ outputStructure }) {
       return `${modelGridRecords.length} images · ${cls} · ${methodLabel}`;
     }
     if (!effectiveDataset || !effectiveClassId) return 'Select dataset and class';
-    return `${classCompareMatrix.rows.length} rows · ${classCompareMatrix.models.length} models · ${methodLabel}`;
+    const modelLabel = classCompareMatrix.models.length === availableModels.length
+      ? `${availableModels.length} models`
+      : `${classCompareMatrix.models.length} of ${availableModels.length} models`;
+    return `${classCompareMatrix.rows.length} rows · ${modelLabel} · ${methodLabel}`;
   })();
+
+  // Models are only a filter where they are columns. Everywhere else the model
+  // is a single choice and lives in the selection bar, so the tab would be a
+  // second control for a question already answered.
+  const showModelFacet = vs.mode === 'class_compare';
+  const railTabs = showModelFacet ? (
+    <RailTabs
+      value={facet} onChange={setFacet}
+      items={[
+        { value: 'method', label: 'Methods', selected: selectedMethods.length, total: availableMethods.length },
+        { value: 'model', label: 'Models', selected: selectedModels.length, total: availableModels.length },
+      ]}
+    />
+  ) : null;
 
   return (
     <OverlayContext.Provider value={{ enabled: overlay, opacity: overlayOpacity }}>
@@ -1570,12 +1713,21 @@ function ModelForm({ outputStructure }) {
         {panelCollapsed ? (
           <button className="panel-toggle" onClick={() => setPanelCollapsed(false)} title="Expand controls">
             <span className="panel-toggle__icon">&#8594;</span>
-            <span className="panel-toggle__label">Methods</span>
+            <span className="panel-toggle__label">{showModelFacet && facet === 'model' ? 'Models' : 'Methods'}</span>
           </button>
+        ) : showModelFacet && facet === 'model' ? (
+          <FacetFilter
+            groups={modelGroups} selected={selectedModels} onChange={setSelectedModels}
+            label="Models" noun="model" wikiKind="model"
+            emptyText="Choose a dataset and class to list the models that ran on it."
+            tabs={railTabs}
+            onCollapse={hasContent ? () => setPanelCollapsed(true) : null}
+          />
         ) : (
-          <MethodFilter
+          <FacetFilter
             groups={methodGroups} selected={selectedMethods}
             onChange={setSelectedMethods} disabled={!effectiveDataset}
+            tabs={showModelFacet ? railTabs : null}
             onCollapse={hasContent ? () => setPanelCollapsed(true) : null}
           />
         )}
@@ -1615,7 +1767,9 @@ function ModelForm({ outputStructure }) {
         )}
         {vs.mode === 'class_compare' && (
           <ClassCompareView matrix={classCompareMatrix} methods={selectedMethods}
-            ready={Boolean(effectiveDataset && effectiveClassId)} labels={lblCache[effectiveDataset]} />
+            ready={Boolean(effectiveDataset && effectiveClassId)} labels={lblCache[effectiveDataset]}
+            totalModels={availableModels.length}
+            onHideModel={(m) => setSelectedModels(selectedModels.filter((x) => x !== m))} />
         )}
       </main>
     </div>

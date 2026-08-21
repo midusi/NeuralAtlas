@@ -197,7 +197,7 @@ body {
 .image-card h3,
 .colorbar-legend__title,
 .combo__group-header,
-.method-filter__group-label,
+.facet-filter__group-label,
 .overlay-control__opacity,
 .panel-toggle__label {
   font-size: var(--fs-label);
@@ -561,17 +561,64 @@ body {
   text-orientation: mixed;
 }
 
-/* ── Method filter ──────────────────────────────────────────────
-   The one multi-select in the sidebar. It takes whatever height is left:
-   comparing methods is the reason the tool exists, so it gets the room.
-   Render settings used to sit here — they moved out to the render strip,
-   above the maps they change. */
+/* ── Facet filter ───────────────────────────────────────────────
+   The multi-select in the sidebar — methods, or models when the models
+   are columns. It takes whatever height is left: comparing is the reason
+   the tool exists, so it gets the room. Render settings used to sit here —
+   they moved out to the render strip, above the maps they change. */
+
+/* Two facets, one rail, one height. Smaller than the mode tabs in the top bar:
+   these switch what the rail lists, not what the page is. */
+.rail-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin-right: auto;
+  min-width: 0;
+}
+
+.rail-tabs__tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  padding: var(--space-2xs) var(--space-sm);
+  white-space: nowrap;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text2);
+  transition: background-color var(--t-micro) ease, color var(--t-micro) ease;
+}
+
+.rail-tabs__tab:hover {
+  background: var(--accent-subtle);
+  color: var(--accent-strong);
+}
+
+.rail-tabs__tab--active,
+.rail-tabs__tab--active:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-accent);
+}
+
+/* The count on the idle tab is the whole point of putting it there: the state
+   of the facet you are not looking at, without opening it. */
+.rail-tabs__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
 
 /* Claims the leftover height rather than being pushed down into it. With
    `margin-top: auto` the block was bottom-anchored, so a query that matched
    nothing shrank the list and dropped the search field down the rail after it.
    Now the block is fixed and only the scroll area inside it changes. */
-.method-filter {
+.facet-filter {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -579,33 +626,39 @@ body {
   min-height: 0;
 }
 
-.method-filter__head {
+.facet-filter__head {
   display: flex;
   align-items: baseline;
   gap: var(--space-sm);
 }
 
+/* Pills have padding, so the head switches from baseline to centre when the
+   tabs are in it. */
+.facet-filter__head:has(.rail-tabs) {
+  align-items: center;
+}
+
 /* The count sits with the title; the chevron is pushed to the far edge. */
-.method-filter__count {
+.facet-filter__count {
   margin-right: auto;
 }
 
-.method-filter__head .panel-collapse-btn {
+.facet-filter__head .panel-collapse-btn {
   align-self: center;
 }
 
-.method-filter__count {
+.facet-filter__count {
   font-size: var(--fs-caption);
   color: var(--text2);
   font-variant-numeric: tabular-nums;
 }
 
-.method-filter__actions {
+.facet-filter__actions {
   display: flex;
   gap: var(--space-xs);
 }
 
-.method-filter__actions button {
+.facet-filter__actions button {
   padding: var(--space-2xs) var(--space-sm);
   border-radius: var(--radius-element);
   font-size: var(--fs-caption);
@@ -614,18 +667,18 @@ body {
   transition: background-color var(--t-micro) ease, color var(--t-micro) ease;
 }
 
-.method-filter__actions button {
+.facet-filter__actions button {
   border: 1px solid var(--border);
 }
 
-.method-filter__actions button:hover {
+.facet-filter__actions button:hover {
   background: var(--accent-subtle);
   color: var(--accent-strong);
 }
 
 /* Fills whatever the rail has left and scrolls inside itself, so the box keeps
    the same footprint whether it holds twenty rows or the no-matches line. */
-.method-filter__list {
+.facet-filter__list {
   flex: 1;
   overflow-y: auto;
   min-height: 96px;
@@ -634,7 +687,7 @@ body {
   gap: var(--space-sm);
 }
 
-.method-filter__group-head {
+.facet-filter__group-head {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
@@ -642,11 +695,11 @@ body {
   cursor: pointer;
 }
 
-.method-filter__group-head:hover .method-filter__group-label {
+.facet-filter__group-head:hover .facet-filter__group-label {
   color: var(--accent-strong);
 }
 
-.method-check {
+.facet-check {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
@@ -658,11 +711,11 @@ body {
   transition: background-color var(--t-micro) ease;
 }
 
-.method-check:hover {
+.facet-check:hover {
   background: var(--ghost-hover);
 }
 
-.method-check__label {
+.facet-check__label {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -671,14 +724,14 @@ body {
   cursor: pointer;
 }
 
-.method-check input {
+.facet-check input {
   flex-shrink: 0;
   margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
 }
 
-.method-check__name {
+.facet-check__name {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -1626,12 +1679,46 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
+  min-width: 0;
   font-size: var(--fs-label);
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text2);
+}
+
+.compare-header__name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Always on screen, not summoned by hover: a control nobody can see is a
+   control nobody uses. It sits at --text3, quiet enough that the row of column
+   names still reads as a row of names, and comes up to full ink on hover. */
+.compare-header__hide {
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-body-sm);
+  line-height: 1;
+  color: var(--text3);
+  transition: background-color var(--t-micro) ease, color var(--t-micro) ease;
+}
+
+.compare-header__cell:hover .compare-header__hide {
+  color: var(--text2);
+}
+
+.compare-header__hide:hover {
+  background: var(--ghost-hover);
+  color: var(--text1);
 }
 
 .compare-row {
@@ -2035,7 +2122,7 @@ body {
     top: var(--panel-bar-h);
   }
 
-  .method-filter__list {
+  .facet-filter__list {
     max-height: 240px;
   }
 
