@@ -101,14 +101,13 @@ function resolveMethodEntries(methods, outputs = {}) {
 // Heavy image binaries live on Hugging Face datasets; JSON metadata stays local (in git).
 // Set VITE_ASSET_SOURCE=local to serve everything from public/.
 const HF_DATASET = 'https://huggingface.co/datasets/Matgc04';
-// imagenet-pico is a *private* HF dataset. By default it's served locally (public/).
-// Only when VITE_WORKER_URL is set does it get proxied through the Cloudflare Worker
-// (which injects the HF token server-side).
+// imagenet-pico images live in a private HF dataset. Its small JSON metadata stays
+// public and local, so only files below val/ go through the authenticated Worker.
 const WORKER_ORIGIN = import.meta.env.VITE_WORKER_URL;
 const HF_ROUTES = import.meta.env.VITE_ASSET_SOURCE === 'local' ? [] : [
   { test: /^imagenet-pico-ai\/val\//, base: `${HF_DATASET}/neuralatlas-imagenet-pico-ai/resolve/main/`, strip: /^imagenet-pico-ai\// },
   { test: /^outputs\/images\//, base: `${HF_DATASET}/neuralatlas-attributions/resolve/main/`, strip: /^outputs\// },
-  ...(WORKER_ORIGIN ? [{ test: /^imagenet-pico\//, base: `${WORKER_ORIGIN}/hf/`, strip: /^imagenet-pico\// }] : []),
+  ...(WORKER_ORIGIN ? [{ test: /^imagenet-pico\/val\//, base: `${WORKER_ORIGIN}/hf/`, strip: /^imagenet-pico\// }] : []),
 ];
 
 function resolveAssetUrl(path) {
@@ -122,12 +121,29 @@ function resolveAssetUrl(path) {
   return `${BASE_URL}${rel}`;
 }
 
-async function fetchJson(path, options) {
-  const response = await fetch(resolveAssetUrl(path), options);
-  if (!response.ok) {
-    throw new Error(`Failed to load ${path}: ${response.status}`);
+async function fetchJson(path, { retryCount = 0, retryDelayMs = 400, signal, ...options } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await fetch(resolveAssetUrl(path), { ...options, signal });
+      if (!response.ok) throw new Error(`Failed to load ${path}: ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (error.name === 'AbortError' || attempt >= retryCount) throw error;
+      const jitter = 0.75 + Math.random() * 0.5;
+      await new Promise((resolve, reject) => {
+        const onAbort = () => {
+          clearTimeout(timeoutId);
+          reject(signal.reason);
+        };
+        const timeoutId = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, retryDelayMs * (2 ** attempt) * jitter);
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    }
   }
-  return response.json();
 }
 
 function buildLegacyOutputStructure(manifest, runPayloads) {
@@ -1227,7 +1243,7 @@ function ModelForm({ outputStructure }) {
 
     if (!imgCache[ds]) {
       updStatus({ imagesLoading: true, imagesError: null });
-      fetchJson(`${ds}/${ds}_structure.json`, { signal })
+      fetchJson(`${ds}/${ds}_structure.json`, { signal, retryCount: 2 })
         .then((data) => { if (!signal.aborted) setImgCache((p) => ({ ...p, [ds]: data })); })
         .catch((e) => { if (e.name !== 'AbortError') updStatus({ imagesError: 'Failed to load.' }); })
         .finally(() => updStatus({ imagesLoading: false }));
@@ -1235,11 +1251,10 @@ function ModelForm({ outputStructure }) {
 
     if (!lblCache[ds]) {
       updStatus({ labelsLoading: true, labelsError: null });
-      fetchJson('imagenet-mini/imagenet-1k-id2label.json', { signal })
+      fetchJson('imagenet-mini/imagenet-1k-id2label.json', { signal, retryCount: 2 })
         .then((data) => { if (!signal.aborted) setLblCache((p) => ({ ...p, [ds]: data })); })
         .catch((e) => {
           if (e.name !== 'AbortError') {
-            setLblCache((p) => ({ ...p, [ds]: {} }));
             updStatus({ labelsError: 'Failed to load.' });
           }
         })
@@ -1459,11 +1474,6 @@ function ModelForm({ outputStructure }) {
         />
       )}
     </SelectionBar>
-    {(dsInfo.imagesError || dsInfo.labelsError) && (
-      <div className="selection-status">
-        <p className="status-message" role="status">Some dataset metadata failed to load.</p>
-      </div>
-    )}
     <div className={`viewer-layout${panelCollapsed ? ' viewer-layout--collapsed' : ''}`}>
       <aside className={`controls-panel${panelCollapsed ? ' controls-panel--collapsed' : ''}`}>
         {panelCollapsed ? (
@@ -1481,6 +1491,11 @@ function ModelForm({ outputStructure }) {
       </aside>
 
       <main className="viewer-content">
+        {(dsInfo.imagesError || dsInfo.labelsError) && (
+          <div className="selection-status">
+            <p className="status-message" role="status">Some dataset metadata failed to load.</p>
+          </div>
+        )}
         {/* The card names what is on screen; the render strip sets how it is
             drawn. Reading order follows: subject first, then controls, then
             the maps they act on. */}

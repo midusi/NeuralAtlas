@@ -479,7 +479,7 @@ body {
 /* The one thing that can go wrong at this level: the metadata behind the
    path. It reports right under the path it broke. */
 .selection-status {
-  padding: var(--space-sm) var(--space-lg);
+  padding: 0;
 }
 
 /* ── Sidebar ────────────────────────────────────────────────── */
