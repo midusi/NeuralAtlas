@@ -1202,6 +1202,17 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* In the single-image wall the verdict shares the original's caption row.
+   Keeping one common header height makes every image start on the same line. */
+.gallery-grid .image-card__header {
+  min-height: 35px;
+  align-items: center;
+}
+
+.gallery-grid .image-card__header .prediction {
+  margin: calc(-1 * var(--space-2xs)) 0;
+}
+
 .image-card h3 {
   min-width: 0;
   overflow-wrap: break-word;

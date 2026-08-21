@@ -1239,12 +1239,11 @@ function SingleImageGallery({ imageData, labels }) {
     <section className="image-gallery">
       <SectionRule label={`Original + ${outputs.length} attribution${outputs.length === 1 ? '' : 's'}`} />
       <div className="gallery-grid">
-        {/* The verdict belongs to the photograph, not to the section: it is a
-            fact about this image, so it leads this card — read before the
-            caption and the picture, as it does in the grid and compare views. */}
         <div className="image-card" style={{ '--delay': '80ms' }}>
-          <PredictionBadge prediction={imageData.prediction} classId={imageData.classId} labels={labels} />
-          <div className="image-card__header"><h3>Image</h3></div>
+          <div className="image-card__header">
+            <h3>Image</h3>
+            <PredictionBadge prediction={imageData.prediction} classId={imageData.classId} labels={labels} />
+          </div>
           <OriginalImage className="image-card__image image-card__image--original" src={resolveAssetUrl(imageData.original)} alt="Original selection" />
         </div>
         {outputs.map(([method, url]) => (
