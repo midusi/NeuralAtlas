@@ -35,7 +35,7 @@ function writeStateToUrl(vs) {
 function initialTheme() {
   const saved = localStorage.getItem('theme');
   if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return 'light';
 }
 
 // Apply once at module load — before first render, no flash, no effect.
@@ -1127,11 +1127,12 @@ function SingleImageGallery({ imageData, labels }) {
       <SectionRule label={`Original + ${outputs.length} attribution${outputs.length === 1 ? '' : 's'}`} />
       <div className="gallery-grid">
         {/* The verdict belongs to the photograph, not to the section: it is a
-            fact about this image, so it hangs under this image. */}
+            fact about this image, so it leads this card — read before the
+            caption and the picture, as it does in the grid and compare views. */}
         <div className="image-card" style={{ '--delay': '80ms' }}>
+          <PredictionBadge prediction={imageData.prediction} classId={imageData.classId} labels={labels} />
           <div className="image-card__header"><h3>Image</h3></div>
           <OriginalImage className="image-card__image image-card__image--original" src={resolveAssetUrl(imageData.original)} alt="Original selection" />
-          <PredictionBadge prediction={imageData.prediction} classId={imageData.classId} labels={labels} />
         </div>
         {outputs.map(([method, url]) => (
           <div key={method} className="image-card">

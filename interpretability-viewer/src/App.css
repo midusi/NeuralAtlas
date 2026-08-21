@@ -1719,6 +1719,13 @@ body {
   line-height: 1.3;
 }
 
+/* Leading the card, the pill spaces itself downward instead of upward so it
+   sits flush with the top of the column, level with the other cards' captions. */
+.image-card .prediction {
+  margin-top: 0;
+  margin-bottom: var(--space-sm);
+}
+
 .prediction__icon {
   flex-shrink: 0;
   font-weight: 700;
