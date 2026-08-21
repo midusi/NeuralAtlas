@@ -2,6 +2,20 @@
   "methods": [
     {
       "category": "perturbation",
+      "id": "CB-RISE",
+      "label": "CB-RISE",
+      "requires_layer": false,
+      "segmentation": null
+    },
+    {
+      "category": "perturbation",
+      "id": "RISE",
+      "label": "RISE",
+      "requires_layer": false,
+      "segmentation": null
+    },
+    {
+      "category": "perturbation",
       "id": "Occlusion",
       "label": "Occlusion",
       "requires_layer": false,
@@ -86,13 +100,6 @@
     },
     {
       "category": "perturbation",
-      "id": "Lime (Quickshift)",
-      "label": "Lime (Quickshift)",
-      "requires_layer": false,
-      "segmentation": "Quickshift"
-    },
-    {
-      "category": "perturbation",
       "id": "Lime (KMeans)",
       "label": "Lime (KMeans)",
       "requires_layer": false,
@@ -107,36 +114,8 @@
     },
     {
       "category": "perturbation",
-      "id": "KernelShap (Quickshift)",
-      "label": "KernelShap (Quickshift)",
-      "requires_layer": false,
-      "segmentation": "Quickshift"
-    },
-    {
-      "category": "perturbation",
       "id": "KernelShap (KMeans)",
       "label": "KernelShap (KMeans)",
-      "requires_layer": false,
-      "segmentation": "KMeans"
-    },
-    {
-      "category": "perturbation",
-      "id": "ShapleyValueSampling (SLIC)",
-      "label": "ShapleyValueSampling (SLIC)",
-      "requires_layer": false,
-      "segmentation": "SLIC"
-    },
-    {
-      "category": "perturbation",
-      "id": "ShapleyValueSampling (Quickshift)",
-      "label": "ShapleyValueSampling (Quickshift)",
-      "requires_layer": false,
-      "segmentation": "Quickshift"
-    },
-    {
-      "category": "perturbation",
-      "id": "ShapleyValueSampling (KMeans)",
-      "label": "ShapleyValueSampling (KMeans)",
       "requires_layer": false,
       "segmentation": "KMeans"
     }

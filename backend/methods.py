@@ -139,8 +139,8 @@ def method_catalog() -> list[MethodCatalogEntry]:
         MethodCatalogEntry("Deconvolution", "Deconvolution", "gradient"),
         MethodCatalogEntry("LayerIntegratedGradients", "LayerIntegratedGradients", "gradient", True),
     ]
-    segmented_methods = ["Lime", "KernelShap", "ShapleyValueSampling"]
-    segmentations = ["SLIC", "Quickshift", "KMeans"]
+    segmented_methods = ["Lime", "KernelShap"]
+    segmentations = ["SLIC", "KMeans"]
     for method_name in segmented_methods:
         for segmentation in segmentations:
             base_entries.append(
@@ -176,9 +176,8 @@ def build_interp_methods(
         Lime,
         Occlusion,
         Saliency,
-        ShapleyValueSampling,
     )
-    from skimage.segmentation import quickshift, slic
+    from skimage.segmentation import slic
 
     from backend.cb_rise import CBRISE
     from backend.rise import RISE
@@ -188,12 +187,6 @@ def build_interp_methods(
         n_segments=100,
         compactness=10.0,
         start_label=0,
-    )
-    quickshift_medium = _make_superpixel_runtime_kwargs(
-        quickshift,
-        kernel_size=8,
-        max_dist=15,
-        ratio=0.8,
     )
     kmeans_medium = _make_superpixel_runtime_kwargs(
         kmeans_superpixels,
@@ -257,56 +250,32 @@ def build_interp_methods(
         AttributionConfig(GuidedBackprop),
         AttributionConfig(InputXGradient),
         AttributionConfig(Deconvolution),
-        AttributionConfig(Lime, runtime_kwargs_fn=slic_medium, n_samples=50, suffix="(SLIC)"),
         AttributionConfig(
             Lime,
-            runtime_kwargs_fn=quickshift_medium,
-            n_samples=50,
-            suffix="(Quickshift)",
+            runtime_kwargs_fn=slic_medium,
+            n_samples=300,
+            perturbations_per_eval=32,
+            suffix="(SLIC)",
         ),
         AttributionConfig(
             Lime,
             runtime_kwargs_fn=kmeans_medium,
-            n_samples=50,
+            n_samples=300,
+            perturbations_per_eval=32,
             suffix="(KMeans)",
         ),
         AttributionConfig(
             KernelShap,
             runtime_kwargs_fn=slic_medium,
-            n_samples=50,
+            n_samples=300,
+            perturbations_per_eval=32,
             suffix="(SLIC)",
         ),
         AttributionConfig(
             KernelShap,
-            runtime_kwargs_fn=quickshift_medium,
-            n_samples=50,
-            suffix="(Quickshift)",
-        ),
-        AttributionConfig(
-            KernelShap,
             runtime_kwargs_fn=kmeans_medium,
-            n_samples=50,
-            suffix="(KMeans)",
-        ),
-        AttributionConfig(
-            ShapleyValueSampling,
-            runtime_kwargs_fn=slic_medium,
-            n_samples=15,
-            perturbations_per_eval=8,
-            suffix="(SLIC)",
-        ),
-        AttributionConfig(
-            ShapleyValueSampling,
-            runtime_kwargs_fn=quickshift_medium,
-            n_samples=15,
-            perturbations_per_eval=8,
-            suffix="(Quickshift)",
-        ),
-        AttributionConfig(
-            ShapleyValueSampling,
-            runtime_kwargs_fn=kmeans_medium,
-            n_samples=15,
-            perturbations_per_eval=8,
+            n_samples=300,
+            perturbations_per_eval=32,
             suffix="(KMeans)",
         ),
         AttributionConfig(
