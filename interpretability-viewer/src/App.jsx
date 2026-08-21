@@ -431,7 +431,7 @@ function MetricBadges({ metrics }) {
   );
 }
 
-function MiniImage({ caption, src, alt, missingText = 'Not available', variant = 'attribution', originalSrc, metrics, wikiKind }) {
+function MiniImage({ caption, captionActions, src, alt, missingText = 'Not available', variant = 'attribution', originalSrc, metrics, wikiKind }) {
   const resolvedSrc = resolveAssetUrl(src);
   // Name first, then the picture. In a wall of twenty heatmaps you scan for a
   // method by name and then look at what it produced, so the label leads.
@@ -440,6 +440,7 @@ function MiniImage({ caption, src, alt, missingText = 'Not available', variant =
       <figcaption>
         <span className="mini-image__name">{caption}</span>
         {wikiKind && <InfoDot kind={wikiKind} id={caption} label={caption} />}
+        {captionActions}
       </figcaption>
       {!resolvedSrc
         ? <div className="mini-image__missing">{missingText}</div>
@@ -1174,6 +1175,59 @@ function ModelGridView({ records, methods, ready, labels }) {
 }
 
 function ClassCompareView({ matrix, methods, ready, labels }) {
+  const rowRefs = useRef([]);
+  const activeRowRef = useRef(null);
+
+  const scrollToRow = (index) => {
+    const row = rowRefs.current[index];
+    if (!row) return;
+    activeRowRef.current = index;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    row.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName))) return;
+
+      const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
+      const delta = plainKey && !event.shiftKey && event.key.toLowerCase() === 'j'
+        ? 1
+        : plainKey && !event.shiftKey && event.key.toLowerCase() === 'k'
+          ? -1
+          : plainKey && event.shiftKey && event.key === 'ArrowDown'
+            ? 1
+            : plainKey && event.shiftKey && event.key === 'ArrowUp'
+              ? -1
+              : 0;
+      if (!delta) return;
+
+      const rows = rowRefs.current.filter(Boolean);
+      const stickyBottoms = ['.topbar', '.selection-bar', '.render-bar', '.compare-header', '.viewer-layout--collapsed .controls-panel']
+        .map((selector) => document.querySelector(selector)?.getBoundingClientRect())
+        .filter((rect) => rect?.height > 0 && rect.bottom > 0)
+        .map((rect) => rect.bottom);
+      const anchor = Math.max(0, ...stickyBottoms) + 8;
+      const visible = rows.findIndex((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.top <= anchor && rect.bottom > anchor;
+      });
+      const fallback = rows.reduce((best, row, index) => {
+        const distance = Math.abs(row.getBoundingClientRect().top - anchor);
+        return distance < best.distance ? { index, distance } : best;
+      }, { index: 0, distance: Infinity }).index;
+      const current = activeRowRef.current ?? (visible < 0 ? fallback : visible);
+      const next = Math.max(0, Math.min(rows.length - 1, current + delta));
+      if (next === current) return;
+      event.preventDefault();
+      scrollToRow(next);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [matrix.rows]);
+
   if (!ready) return <EmptyState title="Choose dataset and class" description="Pick a dataset and class to align the same image IDs across models." />;
   if (!matrix.rows.length) return <EmptyState title="No aligned rows found" description="No images are available for this class across the selected models." />;
 
@@ -1186,12 +1240,33 @@ function ClassCompareView({ matrix, methods, ready, labels }) {
           <div key={m} className="compare-header__cell">{m}</div>
         ))}
       </div>
-      {matrix.rows.map((row) => {
+      {matrix.rows.map((row, rowIndex) => {
         const origUrl = row.cells.find((c) => c.record?.originalUrl)?.record?.originalUrl ?? null;
         return (
-          <div key={row.imageId} className="compare-row" style={style}>
+          <div
+            key={row.imageId} className="compare-row" style={style}
+            ref={(node) => { rowRefs.current[rowIndex] = node; }}
+          >
             <article className="compare-cell compare-cell--original">
-              <MiniImage caption={`Image ${row.imageId}`} src={origUrl} alt={`Original image ${row.imageId}`} missingText="Original unavailable" variant="original" />
+              <MiniImage
+                caption={`Image ${row.imageId}`} src={origUrl} alt={`Original image ${row.imageId}`}
+                missingText="Original unavailable" variant="original"
+                captionActions={(
+                  <nav className="compare-nav" aria-label={`Image ${rowIndex + 1} of ${matrix.rows.length}`}>
+                    <span className="compare-nav__count">{rowIndex + 1} / {matrix.rows.length}</span>
+                  <button
+                    type="button" className="compare-nav__button"
+                    disabled={rowIndex === 0} onClick={() => scrollToRow(rowIndex - 1)}
+                    aria-label="Previous image" title="Previous image · K"
+                  >&#8249;</button>
+                  <button
+                    type="button" className="compare-nav__button"
+                    disabled={rowIndex === matrix.rows.length - 1} onClick={() => scrollToRow(rowIndex + 1)}
+                    aria-label="Next image" title="Next image · J"
+                  >&#8250;</button>
+                  </nav>
+                )}
+              />
             </article>
             {row.cells.map((cell) => (
               <article key={`${row.imageId}__${cell.model}`} className="compare-cell" data-model={cell.model}>
