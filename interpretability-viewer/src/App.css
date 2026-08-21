@@ -1676,16 +1676,14 @@ body {
 
 .compare-matrix {
   gap: var(--space-lg);
-  /* A y-axis label, not a column of text. Rotated it needs the width of one
-     line, and the ~96px it used to hold go back to the model columns — which
-     is the scarce axis here, one more column per model checked. */
-  --compare-gutter: 28px;
 }
 
+/* Method names live in each map caption, so the full width belongs to the
+   original and model columns. */
 .compare-header,
 .compare-row {
   display: grid;
-  grid-template-columns: var(--compare-gutter) repeat(var(--compare-columns, 1), minmax(220px, 1fr));
+  grid-template-columns: repeat(var(--compare-columns, 1), minmax(220px, 1fr));
   gap: var(--space-lg);
 }
 
@@ -1751,49 +1749,9 @@ body {
   scroll-margin-top: calc(var(--chrome-h) + var(--renderbar-h) + 48px + var(--space-sm));
 }
 
-/* The method name is a property of the row, not of every cell in it: printed
-   once here instead of once per model. Same weight and tracking as the model
-   names in the header, because it is the other half of the same pair of axes. */
-.compare-row__method {
-  grid-column: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-xs);
-  min-width: 0;
-  /* Centred against the band it names, the way an axis label sits against its
-     axis: the grid row is as tall as the maps, not as tall as this. */
-  align-self: center;
-  max-height: 100%;
-  font-size: var(--fs-label);
-  font-weight: 600;
-  line-height: 1.25;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text2);
-}
-
-/* Bottom-to-top, like the ylabel of a figure. Never wrapped: a second line
-   would widen the gutter back out, and the whole point is that it doesn't. */
-.compare-row__method-name {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  min-height: 0;
-  max-height: 100%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Upright, and above the label rather than after it: a rotated hit target
-   reads as a mistake, and this is the one thing in the gutter you click. */
-.compare-row__method .info-dot {
-  order: -1;
-}
-
 .compare-row__empty {
   grid-column: 2 / -1;
+  margin-top: var(--space-md);
   font-size: var(--fs-body-sm);
   color: var(--text2);
 }
@@ -1810,17 +1768,18 @@ body {
 /* Column two, and it holds every method row: the thing being compared against
    is one image, not one image per method. */
 .compare-cell--original {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 1 / -1;
   position: sticky;
   top: calc(var(--chrome-h) + var(--renderbar-h) + 48px);
   align-self: start;
 }
 
-/* Empty by design — it keeps the prediction badges out of the label gutter. */
+/* The gutter they used to fill is gone; the markup keeps them for the
+   one-column layout, where they are hidden too. */
 .compare-header__gutter,
 .compare-row__gutter {
-  grid-column: 1;
+  display: none;
 }
 
 .compare-nav {
@@ -2083,7 +2042,7 @@ body {
 
   .compare-header,
   .compare-row {
-    grid-template-columns: var(--compare-gutter) repeat(var(--compare-columns, 1), minmax(200px, 1fr));
+    grid-template-columns: repeat(var(--compare-columns, 1), minmax(200px, 1fr));
     gap: var(--space-md);
   }
 }
@@ -2314,30 +2273,6 @@ body {
   .compare-header__gutter,
   .compare-row__gutter {
     display: none;
-  }
-
-  /* One column, so the label is a section heading over its maps again — and a
-     heading is read across, not up. */
-  .compare-row__method {
-    flex-direction: row;
-    align-items: baseline;
-    justify-content: flex-start;
-    align-self: auto;
-    max-height: none;
-    padding-top: var(--space-xs);
-    border-top: 1px solid var(--border);
-  }
-
-  .compare-row__method-name {
-    writing-mode: horizontal-tb;
-    transform: none;
-    white-space: normal;
-    overflow: visible;
-    overflow-wrap: anywhere;
-  }
-
-  .compare-row__method .info-dot {
-    order: 0;
   }
 
   .compare-row__empty {
