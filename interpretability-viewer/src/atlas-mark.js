@@ -8,6 +8,7 @@ const SPREAD = 0.9;
 const RAMP_TOKENS = ['--logo-0', '--logo-1', '--logo-2'];
 
 const gaussian = (d, s) => Math.exp(-(d * d) / (2 * s * s));
+const clamp01 = (value) => Math.min(1, Math.max(0, value));
 
 const attention = (i, j, n, s) => Math.max(
   gaussian(j, s * 0.85),
@@ -34,7 +35,7 @@ function sampleRamp(ramp, t) {
   return `rgb(${lo.map((c, k) => Math.round(c + (hi[k] - c) * f)).join(',')})`;
 }
 
-export function paintMark(canvas, size, scale) {
+export function paintMark(canvas, size, scale, time = null) {
   // Cells never fall below ~3px: the grid coarsens instead of the drawing shrinking.
   const n = Math.max(5, Math.min(RESOLUTION, Math.floor(size / 3)));
   const spread = SPREAD * (n / RESOLUTION);
@@ -50,9 +51,25 @@ export function paintMark(canvas, size, scale) {
   ctx.clip();
 
   const cell = size / n;
+  let hotCell = null;
+  if (time !== null) {
+    const phase = (time * 1.1) % 6;
+    const path = Math.min(2.999, phase < 3 ? phase : 6 - phase);
+    const segment = Math.floor(path);
+    const position = (path - segment) * (n - 1);
+    hotCell = segment === 0
+      ? [n - 1 - position, 0]
+      : segment === 1
+        ? [position, position]
+        : [n - 1 - position, n - 1];
+  }
+
   for (let i = 0; i < n; i += 1) {
     for (let j = 0; j < n; j += 1) {
-      ctx.fillStyle = sampleRamp(ramp, attention(i, j, n, spread));
+      const pulse = hotCell
+        ? 0.75 * gaussian(Math.hypot(i - hotCell[0], j - hotCell[1]), 1.1)
+        : 0;
+      ctx.fillStyle = sampleRamp(ramp, clamp01(attention(i, j, n, spread) + pulse));
       ctx.fillRect(Math.floor(j * cell), Math.floor(i * cell), Math.ceil(cell), Math.ceil(cell));
     }
   }
@@ -69,15 +86,23 @@ export const useTheme = () => useSyncExternalStore(
   () => document.documentElement.dataset.theme,
 );
 
-// Same generator at 32px, handed to the browser as the tab icon on every theme change.
+// At 10 fps the pulse stays legible without continuously re-encoding unnecessary frames.
 export function useAtlasFavicon() {
   const theme = useTheme();
 
   useEffect(() => {
     const canvas = document.createElement('canvas');
-    paintMark(canvas, 32, 1);
     const link = document.querySelector('link[rel="icon"]');
     link.type = 'image/png';
-    link.href = canvas.toDataURL('image/png');
+
+    const startedAt = performance.now();
+    const paintFrame = () => {
+      paintMark(canvas, 32, 1, (performance.now() - startedAt) / 1000);
+      link.href = canvas.toDataURL('image/png');
+    };
+
+    paintFrame();
+    const timer = window.setInterval(paintFrame, 100);
+    return () => window.clearInterval(timer);
   }, [theme]);
 }
