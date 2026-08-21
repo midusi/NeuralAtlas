@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AtlasMark } from './AtlasMark';
 import { useAtlasFavicon } from './atlas-mark';
@@ -149,6 +149,14 @@ function compareMethods(category, a, b) {
 // this particular image has no output for.
 function resolveMethodEntries(methods, outputs = {}) {
   return (methods ?? []).filter((m) => outputs?.[m]).map((m) => [m, outputs[m]]);
+}
+
+// Same list, but for the whole row of models at once: a method earns a row in
+// the comparison matrix if any model on screen produced it. The models that
+// did not get a hole in that row rather than a shorter column, so what sits
+// side by side is always the same method.
+function compareMethodRows(methods, cells) {
+  return (methods ?? []).filter((m) => cells.some((c) => c.record?.outputs?.[m]));
 }
 
 // Heavy image binaries live on Hugging Face datasets; JSON metadata stays local (in git).
@@ -483,11 +491,15 @@ function MiniImage({ caption, captionActions, src, alt, missingText = 'Not avail
   // method by name and then look at what it produced, so the label leads.
   return (
     <figure className="mini-image">
-      <figcaption>
-        <span className="mini-image__name">{caption}</span>
-        {wikiKind && <InfoDot kind={wikiKind} id={caption} label={caption} />}
-        {captionActions}
-      </figcaption>
+      {/* No caption when the name lives on the axis instead of on the cell —
+          the comparison matrix labels its method rows once, in the gutter. */}
+      {(caption || captionActions) && (
+        <figcaption>
+          {caption && <span className="mini-image__name">{caption}</span>}
+          {caption && wikiKind && <InfoDot kind={wikiKind} id={caption} label={caption} />}
+          {captionActions}
+        </figcaption>
+      )}
       {!resolvedSrc
         ? <div className="mini-image__missing">{missingText}</div>
         : variant === 'original'
@@ -573,8 +585,11 @@ function RenderBar({ overlay, opacity, onToggle, onOpacity }) {
 /* ── Reference layer ────────────────────────────────────────────
    Every model, dataset, method and metric has a glossary entry. The dot
    shows the one-liner on hover, and on click aims the context card at the
-   top of the page at that entry. On touch, where there is no hover, the
-   first tap stands in for it. */
+   top of the page at that entry. A finger has no hover, so the tap that would
+   have hovered is the first one: it shows the tip, and the next one opens the
+   card. What broke that on a phone was the dismissal, not the two steps —
+   listening for the tap that closes the tip from inside the tap that opened
+   it. It is armed a frame later now. */
 
 function InfoDot({ kind, id, label }) {
   const entry = lookupWiki(kind, id);
@@ -593,7 +608,7 @@ function InfoDot({ kind, id, label }) {
     const r = anchorRef.current?.getBoundingClientRect();
     if (r) setAnchor(r);
   };
-  const hide = () => { setAnchor(null); setPos(null); };
+  const hide = () => { setAnchor(null); setPos(null); setByTouch(false); };
 
   // Placed after the tip exists, because deciding whether it fits below the dot
   // needs its measured height. useLayoutEffect, so the first painted frame is
@@ -613,13 +628,15 @@ function InfoDot({ kind, id, label }) {
 
   // A tip a finger opened has no hover to end it: the next touch anywhere else
   // closes it, and so does the page moving under it — the position is measured
-  // once, in viewport coordinates, so a scroll would strand it mid-air.
+  // once, in viewport coordinates, so a scroll would strand it mid-air. The
+  // away-listener waits a frame, or the tap that opened the tip closes it.
   useEffect(() => {
     if (!anchor || !byTouch) return;
     const away = (e) => { if (!rootRef.current?.contains(e.target)) hide(); };
-    document.addEventListener('pointerdown', away);
+    const arm = requestAnimationFrame(() => document.addEventListener('pointerdown', away));
     window.addEventListener('scroll', hide, { passive: true, capture: true });
     return () => {
+      cancelAnimationFrame(arm);
       document.removeEventListener('pointerdown', away);
       window.removeEventListener('scroll', hide, { capture: true });
     };
@@ -627,20 +644,24 @@ function InfoDot({ kind, id, label }) {
 
   if (!entry) return null;
 
-  // Touch has no hover, so the tap that would have hovered is the tap that
-  // opens: the one-liner never gets read. On a finger the first tap shows it
-  // and the second acts on it; a mouse or a keyboard still acts on the first.
+  // First tap reads, second tap acts. A pointerdown that never reported its
+  // type falls back to asking whether this screen can hover at all — a phone
+  // that only fires click must not be treated as a mouse.
+  //
+  // The gate is byTouch and not "is the tip up", because tapping the button
+  // focuses it, onFocus shows the tip, and the click that follows would find
+  // its own tooltip already standing and read as the second tap.
   const act = (e) => {
     e.stopPropagation();
-    const finger = pointer.current === 'touch' || pointer.current === 'pen';
+    const reported = pointer.current;
     pointer.current = null;
-    if (finger && !anchor) {
+    const finger = reported ? reported !== 'mouse' : !window.matchMedia?.('(hover: hover)').matches;
+    if (finger && !byTouch) {
       setByTouch(true);
       show();
       return;
     }
     hide();
-    setByTouch(false);
     open(kind, entry.id);
   };
 
@@ -650,7 +671,7 @@ function InfoDot({ kind, id, label }) {
       /* Filtered by pointer type rather than left as onMouseEnter: touch fires
          a compatibility mouseenter before the click, which would open the tip
          and make the first tap look like the second. */
-      onPointerEnter={(e) => { if (e.pointerType === 'mouse') { setByTouch(false); show(); } }}
+      onPointerEnter={(e) => { if (e.pointerType === 'mouse') show(); }}
       onPointerLeave={(e) => { if (e.pointerType === 'mouse') hide(); }}
     >
       <button
@@ -893,7 +914,16 @@ function FacetFilter({
           </>
         )}
         {onCollapse && (
-          <button type="button" className="panel-collapse-btn" onClick={onCollapse} title="Collapse panel">&#8592;</button>
+          <button
+            type="button" className="panel-collapse-btn" onClick={onCollapse}
+            title={`Collapse ${label.toLowerCase()}`} aria-label={`Collapse ${label.toLowerCase()}`}
+          >
+            {/* On a phone the rail folds up into a bar rather than sideways, so
+                the arrow turns to match and picks up the word it is hiding —
+                a lone glyph in the corner read as part of the crumb above it. */}
+            <span className="panel-collapse-btn__icon" aria-hidden="true">&#8592;</span>
+            <span className="panel-collapse-btn__label">Hide {label.toLowerCase()}</span>
+          </button>
         )}
       </div>
 
@@ -1320,6 +1350,7 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
   return (
     <section className="compare-matrix" aria-label="Class comparison matrix">
       <div className="compare-header" style={style}>
+        <div className="compare-header__gutter" aria-hidden="true" />
         <div className="compare-header__cell compare-header__cell--original">Original</div>
         {matrix.models.map((m) => (
           <div key={m} className="compare-header__cell">
@@ -1340,9 +1371,13 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
       </div>
       {matrix.rows.map((row, rowIndex) => {
         const origUrl = row.cells.find((c) => c.record?.originalUrl)?.record?.originalUrl ?? null;
+        const methodRows = compareMethodRows(methods, row.cells);
+        // The original spans every method row, so the grid needs those rows to
+        // be explicit — an implicit grid has nothing for `1 / -1` to reach.
+        const rowStyle = { ...style, '--compare-rows': methodRows.length + 1 };
         return (
           <div
-            key={row.imageId} className="compare-row" style={style}
+            key={row.imageId} className="compare-row" style={rowStyle}
             ref={(node) => { rowRefs.current[rowIndex] = node; }}
           >
             <article className="compare-cell compare-cell--original">
@@ -1366,15 +1401,35 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
                 )}
               />
             </article>
+            {/* Row 1 of the matrix: what each model called this image. The
+                gutter above the method names stays empty on purpose. */}
+            <div className="compare-row__gutter" aria-hidden="true" />
             {row.cells.map((cell) => (
-              <article key={`${row.imageId}__${cell.model}`} className="compare-cell" data-model={cell.model}>
+              <div key={`prediction__${cell.model}`} className="compare-cell compare-cell--prediction" data-model={cell.model}>
                 <PredictionBadge prediction={cell.record?.prediction} classId={row.classId} labels={labels} />
-                <MethodFigures
-                  methods={methods} outputs={cell.record?.outputs ?? {}} imageId={row.imageId}
-                  originalSrc={cell.record?.originalUrl}
-                  interpretabilityMetrics={cell.record?.interpretabilityMetrics}
-                />
-              </article>
+              </div>
+            ))}
+            {!methodRows.length && (
+              <p className="compare-row__empty">No method checked in the sidebar.</p>
+            )}
+            {methodRows.map((method) => (
+              <Fragment key={method}>
+                <h4 className="compare-row__method">
+                  <span className="compare-row__method-name">{method}</span>
+                  <InfoDot kind="method" id={method} label={method} />
+                </h4>
+                {row.cells.map((cell) => (
+                  <div key={`${method}__${cell.model}`} className="compare-cell compare-cell--map" data-model={cell.model}>
+                    <MiniImage
+                      src={cell.record?.outputs?.[method]}
+                      originalSrc={cell.record?.originalUrl}
+                      alt={`${method} for image ${row.imageId} on ${cell.model}`}
+                      missingText={`No ${method} map`}
+                      metrics={cell.record?.interpretabilityMetrics?.[method]}
+                    />
+                  </div>
+                ))}
+              </Fragment>
             ))}
           </div>
         );
@@ -1399,6 +1454,7 @@ function ModelForm({ outputStructure }) {
     ...readStateFromUrl(),
   }));
   const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const panelRef = useRef(null);
   const [facet, setFacet] = useState('method');
   const [overlay, setOverlay] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(0.8);
@@ -1407,6 +1463,22 @@ function ModelForm({ outputStructure }) {
   const [dsStatus, setDsStatus] = useState({});
 
   const patch = (update) => { const next = { ...vs, ...update }; setVs(next); writeStateToUrl(next); };
+
+  // Where the rail lies down across the top of the content, the bar that opens
+  // it is sticky but the panel it opens is not: tapping it three screens down
+  // expanded a list nobody could see. Opening it goes to it.
+  const isPhone = () => window.matchMedia?.('(max-width: 760px)').matches ?? false;
+  const scrollIntoViewSoon = (target, block = 'start') => {
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => {
+      const node = typeof target === 'string' ? document.querySelector(target) : target;
+      node?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block });
+    }, 0);
+  };
+  const expandPanel = () => {
+    setPanelCollapsed(false);
+    if (isPhone()) scrollIntoViewSoon(panelRef.current);
+  };
 
   const modelOptions = useMemo(() => Object.keys(modelsStruct).sort(), [modelsStruct]);
 
@@ -1548,6 +1620,9 @@ function ModelForm({ outputStructure }) {
       setContextOpen(true);
       if (kind) setContextTab(kind);
       if (kind === 'method' && id) setPickedMethod(id);
+      // The card is pinned to the top of the content and the dot that aims it
+      // can be several screens below. On a phone the answer travels.
+      if (isPhone()) scrollIntoViewSoon('.context-card');
     },
   }), []);
 
@@ -1709,9 +1784,9 @@ function ModelForm({ outputStructure }) {
       )}
     </SelectionBar>
     <div className={`viewer-layout${panelCollapsed ? ' viewer-layout--collapsed' : ''}`}>
-      <aside className={`controls-panel${panelCollapsed ? ' controls-panel--collapsed' : ''}`}>
+      <aside ref={panelRef} className={`controls-panel${panelCollapsed ? ' controls-panel--collapsed' : ''}`}>
         {panelCollapsed ? (
-          <button className="panel-toggle" onClick={() => setPanelCollapsed(false)} title="Expand controls">
+          <button className="panel-toggle" onClick={expandPanel} title="Expand controls">
             <span className="panel-toggle__icon">&#8594;</span>
             <span className="panel-toggle__label">{showModelFacet && facet === 'model' ? 'Models' : 'Methods'}</span>
           </button>

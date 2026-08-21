@@ -532,6 +532,15 @@ body {
   font-size: var(--fs-body);
   line-height: 1;
   padding: var(--space-xs) var(--space-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+/* The word only appears where the glyph alone was ambiguous — see the phone
+   block at the bottom of this file. */
+.panel-collapse-btn__label {
+  display: none;
 }
 
 .panel-collapse-btn:hover,
@@ -1656,12 +1665,15 @@ body {
 
 .compare-matrix {
   gap: var(--space-lg);
+  /* Wide enough for INTEGRATED GRADIENTS on two lines, narrow enough that it
+     does not read as a column of its own. */
+  --compare-gutter: 124px;
 }
 
 .compare-header,
 .compare-row {
   display: grid;
-  grid-template-columns: repeat(var(--compare-columns, 1), minmax(220px, 1fr));
+  grid-template-columns: var(--compare-gutter) repeat(var(--compare-columns, 1), minmax(220px, 1fr));
   gap: var(--space-lg);
 }
 
@@ -1723,7 +1735,37 @@ body {
 
 .compare-row {
   align-items: start;
+  grid-template-rows: repeat(var(--compare-rows, 1), auto);
   scroll-margin-top: calc(var(--chrome-h) + var(--renderbar-h) + 48px + var(--space-sm));
+}
+
+/* The method name is a property of the row, not of every cell in it: printed
+   once here instead of once per model. Same weight and tracking as the model
+   names in the header, because it is the other half of the same pair of axes. */
+.compare-row__method {
+  grid-column: 1;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  min-width: 0;
+  padding-top: 2px;
+  font-size: var(--fs-label);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+
+.compare-row__method-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compare-row__empty {
+  grid-column: 2 / -1;
+  font-size: var(--fs-body-sm);
+  color: var(--text2);
 }
 
 /* No card and no hover lift — cells being compared must not move, and a
@@ -1735,10 +1777,20 @@ body {
   min-width: 0;
 }
 
+/* Column two, and it holds every method row: the thing being compared against
+   is one image, not one image per method. */
 .compare-cell--original {
+  grid-column: 2;
+  grid-row: 1 / -1;
   position: sticky;
   top: calc(var(--chrome-h) + var(--renderbar-h) + 48px);
   align-self: start;
+}
+
+/* Empty by design — it keeps the prediction badges out of the label gutter. */
+.compare-header__gutter,
+.compare-row__gutter {
+  grid-column: 1;
 }
 
 .compare-nav {
@@ -2001,7 +2053,12 @@ body {
 
   .compare-header,
   .compare-row {
-    grid-template-columns: repeat(var(--compare-columns, 1), minmax(200px, 1fr));
+    grid-template-columns: var(--compare-gutter) repeat(var(--compare-columns, 1), minmax(200px, 1fr));
+    gap: var(--space-md);
+  }
+
+  .compare-matrix {
+    --compare-gutter: 104px;
   }
 }
 
@@ -2014,6 +2071,8 @@ body {
     /* The collapsed rail becomes a bar across the top of the content here, so
        what sticks under it measures from this instead of the chrome. */
     --panel-bar-h: 36px;
+    /* The mode tabs, fixed along the bottom edge. */
+    --mode-bar-h: 52px;
   }
 
   .topbar {
@@ -2048,9 +2107,31 @@ body {
     max-width: none;
   }
 
+  /* Navigation that scrolls away is navigation you have lost: the top bar goes
+     static here to give the maps the screen, so the three modes leave it and
+     become a bar at the bottom, where a thumb is anyway. */
   .mode-switcher {
-    order: 1;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 200;
     width: 100%;
+    gap: var(--space-xs);
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg);
+    padding: var(--space-xs) var(--space-xs) calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mode-switcher__tab {
+    flex: 1;
+    text-align: center;
+  }
+
+  /* Nothing may end up underneath the bar. */
+  .viewer-layout {
+    padding-bottom: calc(var(--mode-bar-h) + env(safe-area-inset-bottom, 0px));
   }
 
   /* Stacked, not side by side. Without this the rail and the content are two
@@ -2072,12 +2153,11 @@ body {
   /* Collapsed, the rail lies down. A 48px column of sideways type spends a
      tenth of a phone's width on one word and pushes the way back to the
      methods off the top of the screen; a bar across the content keeps it in
-     the reading order. Sticky, because the thing you want to change methods
-     from is a strip of maps a few screens long. */
+     the reading order. It scrolls away with everything else: pinned, it spent
+     a permanent 36px of a phone screen on a control you touch twice a session,
+     stacked under the render strip that is already pinned there. */
   .viewer-layout--collapsed .controls-panel {
-    position: sticky;
-    top: 0;
-    z-index: 120;
+    position: static;
     width: 100%;
     height: var(--panel-bar-h);
     padding: 0;
@@ -2105,21 +2185,45 @@ body {
     writing-mode: horizontal-tb;
   }
 
+  /* A bare arrow floating at the right edge, one row under the Class crumb,
+     read as part of the crumb. Here it is a bordered control that says what
+     it does, and the arrow points up because that is where the rail folds. */
+  .panel-collapse-btn {
+    border: 1px solid var(--border);
+    padding: var(--space-xs) var(--space-sm);
+    font-size: var(--fs-label);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .panel-collapse-btn__icon {
+    display: inline-block;
+    transform: rotate(90deg);
+    line-height: 1;
+  }
+
+  .panel-collapse-btn__label {
+    display: inline;
+  }
+
+  .context-card {
+    scroll-margin-top: var(--space-sm);
+  }
+
   .viewer-content,
   .viewer-layout--collapsed .viewer-content {
     margin-left: 0;
     width: 100%;
   }
 
-  /* The sidebar is stacked above the content here, so the render strip is
-     already the top of the scroll region: no offset to clear — except under
-     the collapsed bar, which is holding that spot. */
+  /* Nothing is pinned to the top of a phone screen any more. The overlay
+     switch and the colorbar are a setting you touch once and then read maps
+     for ten screens; sticky, they spent 110px of an 850px screen on it, and
+     the strip they left above themselves let the maps scroll through in the
+     gap. They scroll away with the rest of the chrome. */
   .render-bar {
-    top: 0;
-  }
-
-  .viewer-layout--collapsed .render-bar {
-    top: var(--panel-bar-h);
+    position: static;
+    top: auto;
   }
 
   .facet-filter__list {
@@ -2154,13 +2258,6 @@ body {
     top: var(--renderbar-h);
   }
 
-  .compare-cell--original {
-    top: var(--renderbar-h);
-  }
-
-  .viewer-layout--collapsed .compare-cell--original {
-    top: calc(var(--renderbar-h) + var(--panel-bar-h));
-  }
 
   .model-grid {
     grid-template-columns: 1fr;
@@ -2170,17 +2267,49 @@ body {
     display: none;
   }
 
+  /* One column: the matrix unrolls into a list, so the gutter has nowhere to
+     go. The method name becomes a section heading over its own maps, and each
+     map names its model — grouped by method, which is what the labels imply. */
   .compare-row {
     grid-template-columns: 1fr;
-    scroll-margin-top: calc(var(--renderbar-h) + var(--panel-bar-h) + var(--space-sm));
+    grid-template-rows: none;
+    scroll-margin-top: var(--space-sm);
     border: 1px solid var(--border);
     border-radius: var(--radius-component);
     background: var(--surface1);
     padding: var(--space-sm);
   }
 
+  .compare-cell--original {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .compare-header__gutter,
+  .compare-row__gutter {
+    display: none;
+  }
+
+  .compare-row__method {
+    padding-top: var(--space-xs);
+    border-top: 1px solid var(--border);
+  }
+
+  .compare-row__empty {
+    grid-column: auto;
+  }
+
   .compare-cell {
     position: relative;
+  }
+
+  /* Unrolled into a list, the original already sits directly above its maps.
+     Sticky here only made it ride down over the predictions — and once
+     .compare-cell above claimed position: relative, the leftover `top` turned
+     into a plain 63px nudge that dragged it over the first heatmap. Both go. */
+  .compare-cell--original {
+    position: static;
+    top: auto;
   }
 
   /* The column header collapses into a micro-label on each cell. */
