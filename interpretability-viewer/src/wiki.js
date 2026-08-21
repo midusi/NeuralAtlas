@@ -423,6 +423,7 @@ export const WIKI_SECTIONS = [
           ['Limit', 'Runtime grows with the number of segments'],
         ],
         links: [
+          { label: 'Paper (arXiv 1705.07874)', href: 'https://arxiv.org/abs/1705.07874' },
           { label: 'Captum: ShapleyValueSampling', href: `${CAPTUM}shapley_value_sampling.html` },
         ],
       },

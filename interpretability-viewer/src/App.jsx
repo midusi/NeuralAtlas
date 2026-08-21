@@ -61,16 +61,21 @@ const METHOD_CATEGORIES = {
   gradient: {
     label: 'Gradient',
     methods: [
-      'GuidedGradCam', 'GradientShap', 'Saliency', 'IntegratedGradients',
-      'LayerGradCam', 'InputXGradient', 'DeepLift', 'DeepLiftShap', 'GuidedBackprop',
-      'Deconvolution', 'LayerIntegratedGradients',
+      'Saliency', 'InputXGradient',
+      'IntegratedGradients', 'LayerIntegratedGradients',
+      'DeepLift', 'DeepLiftShap', 'GradientShap',
+      'GuidedBackprop', 'Deconvolution',
+      'LayerGradCam', 'GuidedGradCam',
     ],
   },
   perturbation: {
     label: 'Perturbation',
     methods: [
-      'CB-RISE', 'RISE', 'Occlusion', 'KernelShap', 'Lime', 'FeaturePermutation',
-      'FeatureAblation', 'ShapleyValueSampling',
+      'CB-RISE', 'RISE',
+      'Occlusion',
+      'Lime',
+      'KernelShap', 'ShapleyValueSampling',
+      'FeatureAblation', 'FeaturePermutation',
     ],
   },
 };
@@ -90,6 +95,14 @@ function categorizeMethod(name) {
     if (methods.some((m) => norm.startsWith(normalize(m)))) return cat;
   }
   return 'other';
+}
+
+function compareMethods(category, a, b) {
+  const order = METHOD_CATEGORIES[category]?.methods ?? [];
+  const rank = (name) => order.findIndex((method) => normalize(name).startsWith(normalize(method)));
+  const aRank = rank(a), bRank = rank(b);
+  if (aRank !== bRank) return (aRank < 0 ? order.length : aRank) - (bRank < 0 ? order.length : bRank);
+  return String(a).localeCompare(String(b));
 }
 
 // The checked methods, in the order the sidebar lists them, minus the ones
@@ -1298,13 +1311,15 @@ function ModelForm({ outputStructure }) {
     if (!effectiveDataset) return [];
     const methods = new Set();
     for (const r of imageRecords) if (r.dataset === effectiveDataset) Object.keys(r.outputs).forEach((m) => methods.add(m));
-    const sorted = [...methods].sort();
-
     const grouped = {};
-    for (const m of sorted) { const c = categorizeMethod(m); (grouped[c] ??= []).push(m); }
+    for (const m of methods) { const c = categorizeMethod(m); (grouped[c] ??= []).push(m); }
     return [...Object.keys(METHOD_CATEGORIES), 'other']
       .filter((c) => grouped[c]?.length)
-      .map((c) => ({ key: c, label: METHOD_CATEGORIES[c]?.label ?? 'Other', methods: grouped[c] }));
+      .map((c) => ({
+        key: c,
+        label: METHOD_CATEGORIES[c]?.label ?? 'Other',
+        methods: grouped[c].sort((a, b) => compareMethods(c, a, b)),
+      }));
   }, [imageRecords, effectiveDataset]);
 
   const availableMethods = useMemo(() => methodGroups.flatMap((g) => g.methods), [methodGroups]);
