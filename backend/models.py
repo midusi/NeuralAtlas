@@ -6,7 +6,14 @@ from typing import Any, Callable, Optional, TYPE_CHECKING, Union, cast
 import torch
 from torch import Tensor, nn
 from torchvision import models, transforms
-from torchvision.models.resnet import ResNet, ResNet18_Weights, conv3x3
+from torchvision.models._api import WeightsEnum
+from torchvision.models.resnet import (
+    ResNet,
+    ResNet18_Weights,
+    ResNet101_Weights,
+    conv1x1,
+    conv3x3,
+)
 
 if TYPE_CHECKING:
     pass
@@ -88,19 +95,80 @@ class InterpBasicBlock(nn.Module):
         return out
 
 
-class InterpResnet18(ResNet):
+class InterpBottleneck(nn.Module):
+    """Torchvision `Bottleneck` with one ReLU module per activation site.
+
+    The stock block calls a single `self.relu` three times, which DeepLift rejects:
+    it stores one input/output pair per module. Splitting the call sites keeps the
+    parameters (and therefore the pretrained state dict) identical.
+    """
+
+    expansion: int = 4
+
+    def __init__(
+        self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: Optional[nn.Module] = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: Optional[type[nn.Module]] = None,
+    ) -> None:
+        super().__init__()
+
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        width = int(planes * (base_width / 64.0)) * groups
+
+        self.conv1 = conv1x1(inplanes, width)
+        self.bn1 = norm_layer(width)
+        self.relu1 = nn.ReLU(inplace=False)
+
+        self.conv2 = conv3x3(width, width, stride, groups, dilation)
+        self.bn2 = norm_layer(width)
+        self.relu2 = nn.ReLU(inplace=False)
+
+        self.conv3 = conv1x1(width, planes * self.expansion)
+        self.bn3 = norm_layer(planes * self.expansion)
+        self.relu3 = nn.ReLU(inplace=False)
+
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+
+        out = self.relu1(self.bn1(self.conv1(x)))
+        out = self.relu2(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        return self.relu3(out + identity)
+
+
+class InterpResnet(ResNet):
+    """A torchvision ResNet whose blocks have one ReLU module per activation site."""
+
+    block: type[nn.Module] = InterpBasicBlock
+    layers: list[int] = [2, 2, 2, 2]
+    weights_enum: Any = ResNet18_Weights
+
     def __init__(
         self,
         *,
-        weights: Optional[Union[ResNet18_Weights, str]] = None,
+        weights: Optional[Union[WeightsEnum, str]] = None,
         progress: bool = True,
         **kwargs: Any,
     ) -> None:
-        verified_weights = ResNet18_Weights.verify(weights)
+        verified_weights = self.weights_enum.verify(weights)
         if isinstance(verified_weights, str):
             if verified_weights != "DEFAULT":
                 raise ValueError(f"Unsupported weights value: {verified_weights}")
-            verified_weights = ResNet18_Weights.DEFAULT
+            verified_weights = self.weights_enum.DEFAULT
 
         if verified_weights is not None:
             _overwrite_named_param_strict(
@@ -110,14 +178,26 @@ class InterpResnet18(ResNet):
             )
 
         super().__init__(
-            block=cast(Any, InterpBasicBlock),
-            layers=[2, 2, 2, 2],
+            block=cast(Any, self.block),
+            layers=self.layers,
             **kwargs,
         )
 
         if verified_weights is not None:
             state_dict = verified_weights.get_state_dict(progress=progress, check_hash=True)
             self.load_state_dict(state_dict, strict=True)
+
+
+class InterpResnet18(InterpResnet):
+    block = InterpBasicBlock
+    layers = [2, 2, 2, 2]
+    weights_enum = ResNet18_Weights
+
+
+class InterpResnet101(InterpResnet):
+    block = InterpBottleneck
+    layers = [3, 4, 23, 3]
+    weights_enum = ResNet101_Weights
 
 
 def disable_inplace_relu(model: nn.Module) -> nn.Module:
@@ -134,8 +214,11 @@ def build_model_runtime(model_name: str) -> ModelRuntime:
     if not hasattr(models, model_name):
         raise SystemExit(f"Unknown model '{model_name}'.")
 
-    if model_name == "resnet18":
-        base_model = InterpResnet18(weights="DEFAULT").to(device=device, dtype=dtype)
+    interp_resnets = {"resnet18": InterpResnet18, "resnet101": InterpResnet101}
+    if model_name in interp_resnets:
+        base_model = interp_resnets[model_name](weights="DEFAULT").to(
+            device=device, dtype=dtype
+        )
     else:
         base_model = getattr(models, model_name)(weights="DEFAULT").to(
             device=device, dtype=dtype
