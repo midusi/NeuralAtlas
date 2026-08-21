@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AtlasMark } from './AtlasMark';
 import { useAtlasFavicon } from './atlas-mark';
@@ -18,7 +18,7 @@ const useOverlay = () => useContext(OverlayContext);
 const WikiContext = createContext({ open: () => {} });
 const useWiki = () => useContext(WikiContext);
 
-const VS_KEYS = ['mode', 'model', 'dataset', 'classId', 'imageId', 'methods'];
+const VS_KEYS = ['mode', 'model', 'dataset', 'classId', 'imageId', 'methods', 'models'];
 
 function readStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -35,7 +35,7 @@ function writeStateToUrl(vs) {
 function initialTheme() {
   const saved = localStorage.getItem('theme');
   if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return 'light';
 }
 
 // Apply once at module load — before first render, no flash, no effect.
@@ -61,19 +61,64 @@ const METHOD_CATEGORIES = {
   gradient: {
     label: 'Gradient',
     methods: [
-      'GuidedGradCam', 'GradientShap', 'Saliency', 'IntegratedGradients',
-      'LayerGradCam', 'InputXGradient', 'DeepLift', 'DeepLiftShap', 'GuidedBackprop',
-      'Deconvolution', 'LayerIntegratedGradients',
+      'Saliency', 'InputXGradient',
+      'IntegratedGradients', 'LayerIntegratedGradients',
+      'DeepLift', 'DeepLiftShap', 'GradientShap',
+      'GuidedBackprop', 'Deconvolution',
+      'LayerGradCam', 'GuidedGradCam',
     ],
   },
   perturbation: {
     label: 'Perturbation',
     methods: [
-      'CB-RISE', 'RISE', 'Occlusion', 'KernelShap', 'Lime', 'FeaturePermutation',
-      'FeatureAblation', 'ShapleyValueSampling',
+      'CB-RISE', 'RISE',
+      'Occlusion',
+      'Lime',
+      'KernelShap', 'ShapleyValueSampling',
+      'FeatureAblation', 'FeaturePermutation',
     ],
   },
 };
+
+/* Torchvision names carry their family as a prefix, so the rail can group
+   twelve models the way it groups methods: one checkbox for all the ResNets.
+   Order here is the order on screen — architectural lineage, not alphabet. */
+const MODEL_FAMILIES = [
+  { key: 'alexnet', label: 'AlexNet', prefixes: ['alexnet'] },
+  { key: 'vgg', label: 'VGG', prefixes: ['vgg'] },
+  { key: 'inception', label: 'Inception', prefixes: ['inception', 'googlenet'] },
+  { key: 'resnet', label: 'ResNet', prefixes: ['resnet', 'resnext', 'wide_resnet'] },
+  { key: 'densenet', label: 'DenseNet', prefixes: ['densenet'] },
+  { key: 'mobilenet', label: 'MobileNet', prefixes: ['mobilenet'] },
+  { key: 'efficientnet', label: 'EfficientNet', prefixes: ['efficientnet'] },
+  { key: 'regnet', label: 'RegNet', prefixes: ['regnet'] },
+  { key: 'convnext', label: 'ConvNeXt', prefixes: ['convnext'] },
+  { key: 'vit', label: 'ViT', prefixes: ['vit_', 'vit'] },
+  { key: 'swin', label: 'Swin', prefixes: ['swin'] },
+];
+
+function categorizeModel(name) {
+  const norm = normalize(name);
+  return MODEL_FAMILIES.find((f) => f.prefixes.some((p) => norm.startsWith(p)))?.key ?? 'other';
+}
+
+// Within a family, resnet18 before resnet101: the depth suffix is a number,
+// and a plain string sort would read it as text and put 101 first.
+function compareModelNames(a, b) {
+  const [an, bn] = [a, b].map((v) => Number(String(v).match(/\d+/)?.[0] ?? NaN));
+  if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn;
+  return String(a).localeCompare(String(b));
+}
+
+// Groups for the rail, in family order, skipping families this dataset has no
+// run for. Same shape FacetFilter takes for methods, so one component serves both.
+function groupModels(models) {
+  const grouped = {};
+  for (const m of models) (grouped[categorizeModel(m)] ??= []).push(m);
+  return [...MODEL_FAMILIES, { key: 'other', label: 'Other' }]
+    .filter((f) => grouped[f.key]?.length)
+    .map((f) => ({ key: f.key, label: f.label, methods: grouped[f.key].sort(compareModelNames) }));
+}
 
 function normalize(v) {
   return String(v ?? '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim();
@@ -92,23 +137,38 @@ function categorizeMethod(name) {
   return 'other';
 }
 
+function compareMethods(category, a, b) {
+  const order = METHOD_CATEGORIES[category]?.methods ?? [];
+  const rank = (name) => order.findIndex((method) => normalize(name).startsWith(normalize(method)));
+  const aRank = rank(a), bRank = rank(b);
+  if (aRank !== bRank) return (aRank < 0 ? order.length : aRank) - (bRank < 0 ? order.length : bRank);
+  return String(a).localeCompare(String(b));
+}
+
 // The checked methods, in the order the sidebar lists them, minus the ones
 // this particular image has no output for.
 function resolveMethodEntries(methods, outputs = {}) {
   return (methods ?? []).filter((m) => outputs?.[m]).map((m) => [m, outputs[m]]);
 }
 
+// Same list, but for the whole row of models at once: a method earns a row in
+// the comparison matrix if any model on screen produced it. The models that
+// did not get a hole in that row rather than a shorter column, so what sits
+// side by side is always the same method.
+function compareMethodRows(methods, cells) {
+  return (methods ?? []).filter((m) => cells.some((c) => c.record?.outputs?.[m]));
+}
+
 // Heavy image binaries live on Hugging Face datasets; JSON metadata stays local (in git).
 // Set VITE_ASSET_SOURCE=local to serve everything from public/.
 const HF_DATASET = 'https://huggingface.co/datasets/Matgc04';
-// imagenet-pico is a *private* HF dataset. By default it's served locally (public/).
-// Only when VITE_WORKER_URL is set does it get proxied through the Cloudflare Worker
-// (which injects the HF token server-side).
+// imagenet-pico images live in a private HF dataset. Its small JSON metadata stays
+// public and local, so only files below val/ go through the authenticated Worker.
 const WORKER_ORIGIN = import.meta.env.VITE_WORKER_URL;
 const HF_ROUTES = import.meta.env.VITE_ASSET_SOURCE === 'local' ? [] : [
   { test: /^imagenet-pico-ai\/val\//, base: `${HF_DATASET}/neuralatlas-imagenet-pico-ai/resolve/main/`, strip: /^imagenet-pico-ai\// },
   { test: /^outputs\/images\//, base: `${HF_DATASET}/neuralatlas-attributions/resolve/main/`, strip: /^outputs\// },
-  ...(WORKER_ORIGIN ? [{ test: /^imagenet-pico\//, base: `${WORKER_ORIGIN}/hf/`, strip: /^imagenet-pico\// }] : []),
+  ...(WORKER_ORIGIN ? [{ test: /^imagenet-pico\/val\//, base: `${WORKER_ORIGIN}/hf/`, strip: /^imagenet-pico\// }] : []),
 ];
 
 function resolveAssetUrl(path) {
@@ -122,12 +182,29 @@ function resolveAssetUrl(path) {
   return `${BASE_URL}${rel}`;
 }
 
-async function fetchJson(path, options) {
-  const response = await fetch(resolveAssetUrl(path), options);
-  if (!response.ok) {
-    throw new Error(`Failed to load ${path}: ${response.status}`);
+async function fetchJson(path, { retryCount = 0, retryDelayMs = 400, signal, ...options } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await fetch(resolveAssetUrl(path), { ...options, signal });
+      if (!response.ok) throw new Error(`Failed to load ${path}: ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (error.name === 'AbortError' || attempt >= retryCount) throw error;
+      const jitter = 0.75 + Math.random() * 0.5;
+      await new Promise((resolve, reject) => {
+        const onAbort = () => {
+          clearTimeout(timeoutId);
+          reject(signal.reason);
+        };
+        const timeoutId = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, retryDelayMs * (2 ** attempt) * jitter);
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    }
   }
-  return response.json();
 }
 
 function buildLegacyOutputStructure(manifest, runPayloads) {
@@ -202,11 +279,17 @@ function buildImageRecords(outputStructure, imgCache, lblCache) {
   );
 }
 
-function getClassCompareMatrix(records, { dataset, classId }) {
+// `models` is an allow-list: the columns the rail left checked. Rows are built
+// from those records only, so hiding a model that had an image the others lack
+// drops the row with it instead of leaving a line of empty cells.
+function getClassCompareMatrix(records, { dataset, classId, models: allowed }) {
   if (!dataset || !classId) return { models: [], rows: [] };
 
-  const scoped = records.filter((r) => r.dataset === dataset && r.classId === classId);
-  const models = [...new Set(scoped.map((r) => r.model))].sort();
+  const allow = allowed ? new Set(allowed) : null;
+  const scoped = records.filter((r) =>
+    r.dataset === dataset && r.classId === classId && (!allow || allow.has(r.model))
+  );
+  const models = [...new Set(scoped.map((r) => r.model))].sort(compareModelNames);
 
   const byImage = new Map();
   for (const r of scoped) {
@@ -402,16 +485,21 @@ function MetricBadges({ metrics }) {
   );
 }
 
-function MiniImage({ caption, src, alt, missingText = 'Not available', variant = 'attribution', originalSrc, metrics, wikiKind }) {
+function MiniImage({ caption, captionActions, src, alt, missingText = 'Not available', variant = 'attribution', originalSrc, metrics, wikiKind }) {
   const resolvedSrc = resolveAssetUrl(src);
   // Name first, then the picture. In a wall of twenty heatmaps you scan for a
   // method by name and then look at what it produced, so the label leads.
   return (
     <figure className="mini-image">
-      <figcaption>
-        <span className="mini-image__name">{caption}</span>
-        {wikiKind && <InfoDot kind={wikiKind} id={caption} label={caption} />}
-      </figcaption>
+      {/* No caption when the name lives on the axis instead of on the cell —
+          the comparison matrix labels its method rows once, in the gutter. */}
+      {(caption || captionActions) && (
+        <figcaption>
+          {caption && <span className="mini-image__name">{caption}</span>}
+          {caption && wikiKind && <InfoDot kind={wikiKind} id={caption} label={caption} />}
+          {captionActions}
+        </figcaption>
+      )}
       {!resolvedSrc
         ? <div className="mini-image__missing">{missingText}</div>
         : variant === 'original'
@@ -497,8 +585,11 @@ function RenderBar({ overlay, opacity, onToggle, onOpacity }) {
 /* ── Reference layer ────────────────────────────────────────────
    Every model, dataset, method and metric has a glossary entry. The dot
    shows the one-liner on hover, and on click aims the context card at the
-   top of the page at that entry. On touch, where there is no hover, the
-   first tap stands in for it. */
+   top of the page at that entry. A finger has no hover, so the tap that would
+   have hovered is the first one: it shows the tip, and the next one opens the
+   card. What broke that on a phone was the dismissal, not the two steps —
+   listening for the tap that closes the tip from inside the tap that opened
+   it. It is armed a frame later now. */
 
 function InfoDot({ kind, id, label }) {
   const entry = lookupWiki(kind, id);
@@ -517,7 +608,7 @@ function InfoDot({ kind, id, label }) {
     const r = anchorRef.current?.getBoundingClientRect();
     if (r) setAnchor(r);
   };
-  const hide = () => { setAnchor(null); setPos(null); };
+  const hide = () => { setAnchor(null); setPos(null); setByTouch(false); };
 
   // Placed after the tip exists, because deciding whether it fits below the dot
   // needs its measured height. useLayoutEffect, so the first painted frame is
@@ -537,13 +628,15 @@ function InfoDot({ kind, id, label }) {
 
   // A tip a finger opened has no hover to end it: the next touch anywhere else
   // closes it, and so does the page moving under it — the position is measured
-  // once, in viewport coordinates, so a scroll would strand it mid-air.
+  // once, in viewport coordinates, so a scroll would strand it mid-air. The
+  // away-listener waits a frame, or the tap that opened the tip closes it.
   useEffect(() => {
     if (!anchor || !byTouch) return;
     const away = (e) => { if (!rootRef.current?.contains(e.target)) hide(); };
-    document.addEventListener('pointerdown', away);
+    const arm = requestAnimationFrame(() => document.addEventListener('pointerdown', away));
     window.addEventListener('scroll', hide, { passive: true, capture: true });
     return () => {
+      cancelAnimationFrame(arm);
       document.removeEventListener('pointerdown', away);
       window.removeEventListener('scroll', hide, { capture: true });
     };
@@ -551,20 +644,24 @@ function InfoDot({ kind, id, label }) {
 
   if (!entry) return null;
 
-  // Touch has no hover, so the tap that would have hovered is the tap that
-  // opens: the one-liner never gets read. On a finger the first tap shows it
-  // and the second acts on it; a mouse or a keyboard still acts on the first.
+  // First tap reads, second tap acts. A pointerdown that never reported its
+  // type falls back to asking whether this screen can hover at all — a phone
+  // that only fires click must not be treated as a mouse.
+  //
+  // The gate is byTouch and not "is the tip up", because tapping the button
+  // focuses it, onFocus shows the tip, and the click that follows would find
+  // its own tooltip already standing and read as the second tap.
   const act = (e) => {
     e.stopPropagation();
-    const finger = pointer.current === 'touch' || pointer.current === 'pen';
+    const reported = pointer.current;
     pointer.current = null;
-    if (finger && !anchor) {
+    const finger = reported ? reported !== 'mouse' : !window.matchMedia?.('(hover: hover)').matches;
+    if (finger && !byTouch) {
       setByTouch(true);
       show();
       return;
     }
     hide();
-    setByTouch(false);
     open(kind, entry.id);
   };
 
@@ -574,7 +671,7 @@ function InfoDot({ kind, id, label }) {
       /* Filtered by pointer type rather than left as onMouseEnter: touch fires
          a compatibility mouseenter before the click, which would open the tip
          and make the first tap look like the second. */
-      onPointerEnter={(e) => { if (e.pointerType === 'mouse') { setByTouch(false); show(); } }}
+      onPointerEnter={(e) => { if (e.pointerType === 'mouse') show(); }}
       onPointerLeave={(e) => { if (e.pointerType === 'mouse') hide(); }}
     >
       <button
@@ -745,9 +842,11 @@ function ContextCard({
   );
 }
 
-/* ── Method filter ──────────────────────────────────────────────
+/* ── Facet filter ───────────────────────────────────────────────
    Checkboxes, not a single-choice dropdown: the useful question is
-   almost always "these four, without that one". */
+   almost always "these four, without that one". One component serves
+   both facets — methods grouped by family, models grouped by
+   architecture — because the question is identical in both. */
 
 // `indeterminate` is a DOM property with no HTML attribute, so it can only be
 // set imperatively.
@@ -757,7 +856,31 @@ function TriCheckbox({ checked, indeterminate, ...rest }) {
   return <input ref={ref} type="checkbox" checked={checked} {...rest} />;
 }
 
-function MethodFilter({ groups, selected, onChange, disabled, onCollapse }) {
+/* Two facets, one rail. Tabs instead of a second stacked list: the panel keeps
+   one height, and the count on the idle tab reports its state without opening
+   it. Only shown when there is a second facet to reach — see ControlsPanel. */
+function RailTabs({ items, value, onChange }) {
+  return (
+    <div className="rail-tabs" role="tablist" aria-label="Filter facet">
+      {items.map((item) => (
+        <button
+          key={item.value} type="button" role="tab"
+          aria-selected={value === item.value}
+          className={`rail-tabs__tab${value === item.value ? ' rail-tabs__tab--active' : ''}`}
+          onClick={() => onChange(item.value)}
+        >
+          {item.label}
+          <span className="rail-tabs__count">{item.selected}/{item.total}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FacetFilter({
+  groups, selected, onChange, disabled, onCollapse,
+  label = 'Methods', noun = 'method', wikiKind = 'method', emptyText, tabs = null,
+}) {
   const [query, setQuery] = useState('');
   const all = useMemo(() => groups.flatMap((g) => g.methods), [groups]);
   const chosen = useMemo(() => new Set(selected), [selected]);
@@ -780,54 +903,74 @@ function MethodFilter({ groups, selected, onChange, disabled, onCollapse }) {
   };
 
   return (
-    <div className="method-filter">
-      <div className="method-filter__head">
-        <span className="tiny-form__label">Methods</span>
-        <span className="method-filter__count">{selected.length}/{all.length}</span>
+    <div className="facet-filter">
+      <div className="facet-filter__head">
+        {/* The tabs carry the facet's name and count, so the plain label only
+            appears when this is the only list in the rail. */}
+        {tabs ?? (
+          <>
+            <span className="tiny-form__label">{label}</span>
+            <span className="facet-filter__count">{selected.length}/{all.length}</span>
+          </>
+        )}
         {onCollapse && (
-          <button type="button" className="panel-collapse-btn" onClick={onCollapse} title="Collapse panel">&#8592;</button>
+          <button
+            type="button" className="panel-collapse-btn" onClick={onCollapse}
+            title={`Collapse ${label.toLowerCase()}`} aria-label={`Collapse ${label.toLowerCase()}`}
+          >
+            {/* On a phone the rail folds up into a bar rather than sideways, so
+                the arrow turns to match and picks up the word it is hiding —
+                a lone glyph in the corner read as part of the crumb above it. */}
+            <span className="panel-collapse-btn__icon" aria-hidden="true">&#8592;</span>
+            <span className="panel-collapse-btn__label">Hide {label.toLowerCase()}</span>
+          </button>
         )}
       </div>
 
       {disabled || all.length === 0 ? (
-        <p className="status-message">Choose a dataset to list its methods.</p>
+        <p className="status-message">{emptyText ?? `Choose a dataset to list its ${noun}s.`}</p>
       ) : (
         <>
           <input
-            className="combo__input" value={query} placeholder="Filter methods"
+            className="combo__input" value={query} placeholder={`Filter ${noun}s`}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <div className="method-filter__actions">
+          <div className="facet-filter__actions">
             <button type="button" onClick={() => onChange(all)}>All</button>
             <button type="button" onClick={() => onChange([])}>None</button>
           </div>
-          <div className="method-filter__list">
+          <div className="facet-filter__list">
             {visible.length === 0 && <p className="combo__empty">No matches — try a shorter query.</p>}
             {visible.map((group) => {
               const allOn = group.methods.every((m) => chosen.has(m));
+              // A family with one member whose name is the family name would
+              // print itself twice — ALEXNET over alexnet. The row alone says it.
+              const sameName = group.methods.length === 1 && normalize(group.methods[0]) === normalize(group.label);
               return (
-                <div key={group.key} className="method-filter__group">
+                <div key={group.key} className="facet-filter__group">
                   {/* One checkbox for the whole family. Partly-checked shows
                       the dash, so the group's state is readable at a glance
                       without counting its children. */}
-                  <label className="method-filter__group-head">
+                  {!sameName && (
+                  <label className="facet-filter__group-head">
                     <TriCheckbox
                       checked={allOn}
                       indeterminate={!allOn && group.methods.some((m) => chosen.has(m))}
                       onChange={() => toggleGroup(group.methods, !allOn)}
-                      aria-label={`All ${group.label} methods`}
+                      aria-label={`All ${group.label} ${noun}s`}
                     />
-                    <span className="method-filter__group-label">{group.label}</span>
+                    <span className="facet-filter__group-label">{group.label}</span>
                   </label>
+                  )}
                   {/* The info dot sits outside the <label>, or clicking it
                       would toggle the checkbox on the way through. */}
                   {group.methods.map((m) => (
-                    <div key={m} className="method-check">
-                      <label className="method-check__label">
+                    <div key={m} className="facet-check">
+                      <label className="facet-check__label">
                         <input type="checkbox" checked={chosen.has(m)} onChange={() => toggle(m)} />
-                        <span className="method-check__name">{m}</span>
+                        <span className="facet-check__name">{m}</span>
                       </label>
-                      <InfoDot kind="method" id={m} label={m} />
+                      <InfoDot kind={wikiKind} id={m} label={m} />
                     </div>
                   ))}
                 </div>
@@ -1096,12 +1239,12 @@ function SingleImageGallery({ imageData, labels }) {
     <section className="image-gallery">
       <SectionRule label={`Original + ${outputs.length} attribution${outputs.length === 1 ? '' : 's'}`} />
       <div className="gallery-grid">
-        {/* The verdict belongs to the photograph, not to the section: it is a
-            fact about this image, so it hangs under this image. */}
         <div className="image-card" style={{ '--delay': '80ms' }}>
-          <div className="image-card__header"><h3>Image</h3></div>
+          <div className="image-card__header">
+            <h3>Image</h3>
+            <PredictionBadge prediction={imageData.prediction} classId={imageData.classId} labels={labels} />
+          </div>
           <OriginalImage className="image-card__image image-card__image--original" src={resolveAssetUrl(imageData.original)} alt="Original selection" />
-          <PredictionBadge prediction={imageData.prediction} classId={imageData.classId} labels={labels} />
         </div>
         {outputs.map(([method, url]) => (
           <div key={method} className="image-card">
@@ -1144,35 +1287,148 @@ function ModelGridView({ records, methods, ready, labels }) {
   );
 }
 
-function ClassCompareView({ matrix, methods, ready, labels }) {
+function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalModels }) {
+  const rowRefs = useRef([]);
+  const activeRowRef = useRef(null);
+
+  const scrollToRow = (index) => {
+    const row = rowRefs.current[index];
+    if (!row) return;
+    activeRowRef.current = index;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    row.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName))) return;
+
+      const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
+      const delta = plainKey && !event.shiftKey && event.key.toLowerCase() === 'j'
+        ? 1
+        : plainKey && !event.shiftKey && event.key.toLowerCase() === 'k'
+          ? -1
+          : plainKey && event.shiftKey && event.key === 'ArrowDown'
+            ? 1
+            : plainKey && event.shiftKey && event.key === 'ArrowUp'
+              ? -1
+              : 0;
+      if (!delta) return;
+
+      const rows = rowRefs.current.filter(Boolean);
+      const stickyBottoms = ['.topbar', '.selection-bar', '.render-bar', '.compare-header', '.viewer-layout--collapsed .controls-panel']
+        .map((selector) => document.querySelector(selector)?.getBoundingClientRect())
+        .filter((rect) => rect?.height > 0 && rect.bottom > 0)
+        .map((rect) => rect.bottom);
+      const anchor = Math.max(0, ...stickyBottoms) + 8;
+      const visible = rows.findIndex((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.top <= anchor && rect.bottom > anchor;
+      });
+      const fallback = rows.reduce((best, row, index) => {
+        const distance = Math.abs(row.getBoundingClientRect().top - anchor);
+        return distance < best.distance ? { index, distance } : best;
+      }, { index: 0, distance: Infinity }).index;
+      const current = activeRowRef.current ?? (visible < 0 ? fallback : visible);
+      const next = Math.max(0, Math.min(rows.length - 1, current + delta));
+      if (next === current) return;
+      event.preventDefault();
+      scrollToRow(next);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [matrix.rows]);
+
   if (!ready) return <EmptyState title="Choose dataset and class" description="Pick a dataset and class to align the same image IDs across models." />;
+  if (totalModels > 0 && !matrix.models.length) return <EmptyState title="No models checked" description="Check at least one model in the rail to raise a column." />;
   if (!matrix.rows.length) return <EmptyState title="No aligned rows found" description="No images are available for this class across the selected models." />;
 
   const style = { '--compare-columns': matrix.models.length + 1 };
   return (
     <section className="compare-matrix" aria-label="Class comparison matrix">
       <div className="compare-header" style={style}>
+        <div className="compare-header__gutter" aria-hidden="true" />
         <div className="compare-header__cell compare-header__cell--original">Original</div>
         {matrix.models.map((m) => (
-          <div key={m} className="compare-header__cell">{m}</div>
+          <div key={m} className="compare-header__cell">
+            <span className="compare-header__name">{m}</span>
+            <InfoDot kind="model" id={m} label={m} />
+            {/* Dropping a column is a thought you have while reading the
+                column, so the control lives on it. Same act as unchecking it
+                in the rail; it appears on hover and never shifts the header. */}
+            {onHideModel && (
+              <button
+                type="button" className="compare-header__hide"
+                onClick={() => onHideModel(m)}
+                title={`Hide ${m}`} aria-label={`Hide ${m} column`}
+              >&#215;</button>
+            )}
+          </div>
         ))}
       </div>
-      {matrix.rows.map((row) => {
+      {matrix.rows.map((row, rowIndex) => {
         const origUrl = row.cells.find((c) => c.record?.originalUrl)?.record?.originalUrl ?? null;
+        const methodRows = compareMethodRows(methods, row.cells);
+        // The original spans every method row, so the grid needs those rows to
+        // be explicit — an implicit grid has nothing for `1 / -1` to reach.
+        const rowStyle = { ...style, '--compare-rows': methodRows.length + 1 };
         return (
-          <div key={row.imageId} className="compare-row" style={style}>
+          <div
+            key={row.imageId} className="compare-row" style={rowStyle}
+            ref={(node) => { rowRefs.current[rowIndex] = node; }}
+          >
             <article className="compare-cell compare-cell--original">
-              <MiniImage caption={`Image ${row.imageId}`} src={origUrl} alt={`Original image ${row.imageId}`} missingText="Original unavailable" variant="original" />
+              <MiniImage
+                caption={`Image ${row.imageId}`} src={origUrl} alt={`Original image ${row.imageId}`}
+                missingText="Original unavailable" variant="original"
+                captionActions={(
+                  <nav className="compare-nav" aria-label={`Image ${rowIndex + 1} of ${matrix.rows.length}`}>
+                    <span className="compare-nav__count">{rowIndex + 1} / {matrix.rows.length}</span>
+                  <button
+                    type="button" className="compare-nav__button"
+                    disabled={rowIndex === 0} onClick={() => scrollToRow(rowIndex - 1)}
+                    aria-label="Previous image" title="Previous image · K"
+                  >&#8249;</button>
+                  <button
+                    type="button" className="compare-nav__button"
+                    disabled={rowIndex === matrix.rows.length - 1} onClick={() => scrollToRow(rowIndex + 1)}
+                    aria-label="Next image" title="Next image · J"
+                  >&#8250;</button>
+                  </nav>
+                )}
+              />
             </article>
+            {/* Row 1 of the matrix: what each model called this image. The
+                gutter above the method names stays empty on purpose. */}
+            <div className="compare-row__gutter" aria-hidden="true" />
             {row.cells.map((cell) => (
-              <article key={`${row.imageId}__${cell.model}`} className="compare-cell" data-model={cell.model}>
+              <div key={`prediction__${cell.model}`} className="compare-cell compare-cell--prediction" data-model={cell.model}>
                 <PredictionBadge prediction={cell.record?.prediction} classId={row.classId} labels={labels} />
-                <MethodFigures
-                  methods={methods} outputs={cell.record?.outputs ?? {}} imageId={row.imageId}
-                  originalSrc={cell.record?.originalUrl}
-                  interpretabilityMetrics={cell.record?.interpretabilityMetrics}
-                />
-              </article>
+              </div>
+            ))}
+            {!methodRows.length && (
+              <p className="compare-row__empty">No method checked in the sidebar.</p>
+            )}
+            {methodRows.map((method) => (
+              <Fragment key={method}>
+                <h4 className="compare-row__method">
+                  <span className="compare-row__method-name">{method}</span>
+                  <InfoDot kind="method" id={method} label={method} />
+                </h4>
+                {row.cells.map((cell) => (
+                  <div key={`${method}__${cell.model}`} className="compare-cell compare-cell--map" data-model={cell.model}>
+                    <MiniImage
+                      src={cell.record?.outputs?.[method]}
+                      originalSrc={cell.record?.originalUrl}
+                      alt={`${method} for image ${row.imageId} on ${cell.model}`}
+                      missingText={`No ${method} map`}
+                      metrics={cell.record?.interpretabilityMetrics?.[method]}
+                    />
+                  </div>
+                ))}
+              </Fragment>
             ))}
           </div>
         );
@@ -1197,6 +1453,8 @@ function ModelForm({ outputStructure }) {
     ...readStateFromUrl(),
   }));
   const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const panelRef = useRef(null);
+  const [facet, setFacet] = useState('method');
   const [overlay, setOverlay] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(0.8);
   const [imgCache, setImgCache] = useState({});
@@ -1204,6 +1462,22 @@ function ModelForm({ outputStructure }) {
   const [dsStatus, setDsStatus] = useState({});
 
   const patch = (update) => { const next = { ...vs, ...update }; setVs(next); writeStateToUrl(next); };
+
+  // Where the rail lies down across the top of the content, the bar that opens
+  // it is sticky but the panel it opens is not: tapping it three screens down
+  // expanded a list nobody could see. Opening it goes to it.
+  const isPhone = () => window.matchMedia?.('(max-width: 760px)').matches ?? false;
+  const scrollIntoViewSoon = (target, block = 'start') => {
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => {
+      const node = typeof target === 'string' ? document.querySelector(target) : target;
+      node?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block });
+    }, 0);
+  };
+  const expandPanel = () => {
+    setPanelCollapsed(false);
+    if (isPhone()) scrollIntoViewSoon(panelRef.current);
+  };
 
   const modelOptions = useMemo(() => Object.keys(modelsStruct).sort(), [modelsStruct]);
 
@@ -1227,7 +1501,7 @@ function ModelForm({ outputStructure }) {
 
     if (!imgCache[ds]) {
       updStatus({ imagesLoading: true, imagesError: null });
-      fetchJson(`${ds}/${ds}_structure.json`, { signal })
+      fetchJson(`${ds}/${ds}_structure.json`, { signal, retryCount: 2 })
         .then((data) => { if (!signal.aborted) setImgCache((p) => ({ ...p, [ds]: data })); })
         .catch((e) => { if (e.name !== 'AbortError') updStatus({ imagesError: 'Failed to load.' }); })
         .finally(() => updStatus({ imagesLoading: false }));
@@ -1235,11 +1509,10 @@ function ModelForm({ outputStructure }) {
 
     if (!lblCache[ds]) {
       updStatus({ labelsLoading: true, labelsError: null });
-      fetchJson('imagenet-mini/imagenet-1k-id2label.json', { signal })
+      fetchJson('imagenet-mini/imagenet-1k-id2label.json', { signal, retryCount: 2 })
         .then((data) => { if (!signal.aborted) setLblCache((p) => ({ ...p, [ds]: data })); })
         .catch((e) => {
           if (e.name !== 'AbortError') {
-            setLblCache((p) => ({ ...p, [ds]: {} }));
             updStatus({ labelsError: 'Failed to load.' });
           }
         })
@@ -1283,16 +1556,31 @@ function ModelForm({ outputStructure }) {
     if (!effectiveDataset) return [];
     const methods = new Set();
     for (const r of imageRecords) if (r.dataset === effectiveDataset) Object.keys(r.outputs).forEach((m) => methods.add(m));
-    const sorted = [...methods].sort();
-
     const grouped = {};
-    for (const m of sorted) { const c = categorizeMethod(m); (grouped[c] ??= []).push(m); }
+    for (const m of methods) { const c = categorizeMethod(m); (grouped[c] ??= []).push(m); }
     return [...Object.keys(METHOD_CATEGORIES), 'other']
       .filter((c) => grouped[c]?.length)
-      .map((c) => ({ key: c, label: METHOD_CATEGORIES[c]?.label ?? 'Other', methods: grouped[c] }));
+      .map((c) => ({
+        key: c,
+        label: METHOD_CATEGORIES[c]?.label ?? 'Other',
+        methods: grouped[c].sort((a, b) => compareMethods(c, a, b)),
+      }));
   }, [imageRecords, effectiveDataset]);
 
   const availableMethods = useMemo(() => methodGroups.flatMap((g) => g.methods), [methodGroups]);
+
+  // Every model with a run for this dataset and class — the full set of columns
+  // the compare view could raise, before the rail has its say.
+  const modelGroups = useMemo(() => {
+    if (!effectiveDataset || !effectiveClassId) return [];
+    const names = new Set();
+    for (const r of imageRecords) {
+      if (r.dataset === effectiveDataset && r.classId === effectiveClassId) names.add(r.model);
+    }
+    return groupModels([...names]);
+  }, [imageRecords, effectiveDataset, effectiveClassId]);
+
+  const availableModels = useMemo(() => modelGroups.flatMap((g) => g.methods), [modelGroups]);
 
   // Absent from the URL means "all of them", so a link keeps working when the
   // dataset gains a method. An explicit list is intersected with what exists.
@@ -1301,6 +1589,14 @@ function ModelForm({ outputStructure }) {
     const wanted = new Set(vs.methods.split(',').filter(Boolean));
     return availableMethods.filter((m) => wanted.has(m));
   }, [vs.methods, availableMethods]);
+
+  // Same convention as methods: absent from the URL means "all of them", so a
+  // shared link keeps working after the sweep adds convnext.
+  const selectedModels = useMemo(() => {
+    if (vs.models == null) return availableModels;
+    const wanted = new Set(vs.models.split(',').filter(Boolean));
+    return availableModels.filter((m) => wanted.has(m));
+  }, [vs.models, availableModels]);
 
   // The context card is the only reference surface on the page, so its state
   // lives here: which subject it reads, whether the full entry is open, and
@@ -1323,6 +1619,9 @@ function ModelForm({ outputStructure }) {
       setContextOpen(true);
       if (kind) setContextTab(kind);
       if (kind === 'method' && id) setPickedMethod(id);
+      // The card is pinned to the top of the content and the dot that aims it
+      // can be several screens below. On a phone the answer travels.
+      if (isPhone()) scrollIntoViewSoon('.context-card');
     },
   }), []);
 
@@ -1346,6 +1645,11 @@ function ModelForm({ outputStructure }) {
   const setSelectedMethods = (list) => {
     const next = availableMethods.filter((m) => list.includes(m));
     patch({ methods: next.length === availableMethods.length ? null : next.join(',') });
+  };
+
+  const setSelectedModels = (list) => {
+    const next = availableModels.filter((m) => list.includes(m));
+    patch({ models: next.length === availableModels.length ? null : next.join(',') });
   };
 
   const singleImageData = useMemo(() => {
@@ -1372,8 +1676,10 @@ function ModelForm({ outputStructure }) {
   }, [imageRecords, effectiveModel, effectiveDataset, effectiveClassId]);
 
   const classCompareMatrix = useMemo(
-    () => getClassCompareMatrix(imageRecords, { dataset: effectiveDataset, classId: effectiveClassId }),
-    [imageRecords, effectiveDataset, effectiveClassId]
+    () => getClassCompareMatrix(imageRecords, {
+      dataset: effectiveDataset, classId: effectiveClassId, models: selectedModels,
+    }),
+    [imageRecords, effectiveDataset, effectiveClassId, selectedModels]
   );
 
   const selectedModelStats = effectiveModel && effectiveDataset
@@ -1416,8 +1722,25 @@ function ModelForm({ outputStructure }) {
       return `${modelGridRecords.length} images · ${cls} · ${methodLabel}`;
     }
     if (!effectiveDataset || !effectiveClassId) return 'Select dataset and class';
-    return `${classCompareMatrix.rows.length} rows · ${classCompareMatrix.models.length} models · ${methodLabel}`;
+    const modelLabel = classCompareMatrix.models.length === availableModels.length
+      ? `${availableModels.length} models`
+      : `${classCompareMatrix.models.length} of ${availableModels.length} models`;
+    return `${classCompareMatrix.rows.length} rows · ${modelLabel} · ${methodLabel}`;
   })();
+
+  // Models are only a filter where they are columns. Everywhere else the model
+  // is a single choice and lives in the selection bar, so the tab would be a
+  // second control for a question already answered.
+  const showModelFacet = vs.mode === 'class_compare';
+  const railTabs = showModelFacet ? (
+    <RailTabs
+      value={facet} onChange={setFacet}
+      items={[
+        { value: 'method', label: 'Methods', selected: selectedMethods.length, total: availableMethods.length },
+        { value: 'model', label: 'Models', selected: selectedModels.length, total: availableModels.length },
+      ]}
+    />
+  ) : null;
 
   return (
     <OverlayContext.Provider value={{ enabled: overlay, opacity: overlayOpacity }}>
@@ -1459,28 +1782,37 @@ function ModelForm({ outputStructure }) {
         />
       )}
     </SelectionBar>
-    {(dsInfo.imagesError || dsInfo.labelsError) && (
-      <div className="selection-status">
-        <p className="status-message" role="status">Some dataset metadata failed to load.</p>
-      </div>
-    )}
     <div className={`viewer-layout${panelCollapsed ? ' viewer-layout--collapsed' : ''}`}>
-      <aside className={`controls-panel${panelCollapsed ? ' controls-panel--collapsed' : ''}`}>
+      <aside ref={panelRef} className={`controls-panel${panelCollapsed ? ' controls-panel--collapsed' : ''}`}>
         {panelCollapsed ? (
-          <button className="panel-toggle" onClick={() => setPanelCollapsed(false)} title="Expand controls">
+          <button className="panel-toggle" onClick={expandPanel} title="Expand controls">
             <span className="panel-toggle__icon">&#8594;</span>
-            <span className="panel-toggle__label">Methods</span>
+            <span className="panel-toggle__label">{showModelFacet && facet === 'model' ? 'Models' : 'Methods'}</span>
           </button>
+        ) : showModelFacet && facet === 'model' ? (
+          <FacetFilter
+            groups={modelGroups} selected={selectedModels} onChange={setSelectedModels}
+            label="Models" noun="model" wikiKind="model"
+            emptyText="Choose a dataset and class to list the models that ran on it."
+            tabs={railTabs}
+            onCollapse={hasContent ? () => setPanelCollapsed(true) : null}
+          />
         ) : (
-          <MethodFilter
+          <FacetFilter
             groups={methodGroups} selected={selectedMethods}
             onChange={setSelectedMethods} disabled={!effectiveDataset}
+            tabs={showModelFacet ? railTabs : null}
             onCollapse={hasContent ? () => setPanelCollapsed(true) : null}
           />
         )}
       </aside>
 
       <main className="viewer-content">
+        {(dsInfo.imagesError || dsInfo.labelsError) && (
+          <div className="selection-status">
+            <p className="status-message" role="status">Some dataset metadata failed to load.</p>
+          </div>
+        )}
         {/* The card names what is on screen; the render strip sets how it is
             drawn. Reading order follows: subject first, then controls, then
             the maps they act on. */}
@@ -1509,7 +1841,9 @@ function ModelForm({ outputStructure }) {
         )}
         {vs.mode === 'class_compare' && (
           <ClassCompareView matrix={classCompareMatrix} methods={selectedMethods}
-            ready={Boolean(effectiveDataset && effectiveClassId)} labels={lblCache[effectiveDataset]} />
+            ready={Boolean(effectiveDataset && effectiveClassId)} labels={lblCache[effectiveDataset]}
+            totalModels={availableModels.length}
+            onHideModel={(m) => setSelectedModels(selectedModels.filter((x) => x !== m))} />
         )}
       </main>
     </div>

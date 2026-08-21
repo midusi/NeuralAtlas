@@ -128,7 +128,7 @@ class RISE(Attribution):
                     count,
                     ExpansionTypes.repeat_interleave,
                 )
-                scores = _select_targets(output, expanded_target)
+                scores = _select_targets(torch.softmax(output, dim=-1), expanded_target)
                 if scores.numel() != input_batch * count:
                     raise ValueError(
                         "RISE target must select one scalar score per masked input."

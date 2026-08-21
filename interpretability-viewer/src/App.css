@@ -197,7 +197,7 @@ body {
 .image-card h3,
 .colorbar-legend__title,
 .combo__group-header,
-.method-filter__group-label,
+.facet-filter__group-label,
 .overlay-control__opacity,
 .panel-toggle__label {
   font-size: var(--fs-label);
@@ -479,7 +479,7 @@ body {
 /* The one thing that can go wrong at this level: the metadata behind the
    path. It reports right under the path it broke. */
 .selection-status {
-  padding: var(--space-sm) var(--space-lg);
+  padding: 0;
 }
 
 /* ── Sidebar ────────────────────────────────────────────────── */
@@ -532,6 +532,15 @@ body {
   font-size: var(--fs-body);
   line-height: 1;
   padding: var(--space-xs) var(--space-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+/* The word only appears where the glyph alone was ambiguous — see the phone
+   block at the bottom of this file. */
+.panel-collapse-btn__label {
+  display: none;
 }
 
 .panel-collapse-btn:hover,
@@ -561,17 +570,64 @@ body {
   text-orientation: mixed;
 }
 
-/* ── Method filter ──────────────────────────────────────────────
-   The one multi-select in the sidebar. It takes whatever height is left:
-   comparing methods is the reason the tool exists, so it gets the room.
-   Render settings used to sit here — they moved out to the render strip,
-   above the maps they change. */
+/* ── Facet filter ───────────────────────────────────────────────
+   The multi-select in the sidebar — methods, or models when the models
+   are columns. It takes whatever height is left: comparing is the reason
+   the tool exists, so it gets the room. Render settings used to sit here —
+   they moved out to the render strip, above the maps they change. */
+
+/* Two facets, one rail, one height. Smaller than the mode tabs in the top bar:
+   these switch what the rail lists, not what the page is. */
+.rail-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin-right: auto;
+  min-width: 0;
+}
+
+.rail-tabs__tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  padding: var(--space-2xs) var(--space-sm);
+  white-space: nowrap;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text2);
+  transition: background-color var(--t-micro) ease, color var(--t-micro) ease;
+}
+
+.rail-tabs__tab:hover {
+  background: var(--accent-subtle);
+  color: var(--accent-strong);
+}
+
+.rail-tabs__tab--active,
+.rail-tabs__tab--active:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-accent);
+}
+
+/* The count on the idle tab is the whole point of putting it there: the state
+   of the facet you are not looking at, without opening it. */
+.rail-tabs__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
 
 /* Claims the leftover height rather than being pushed down into it. With
    `margin-top: auto` the block was bottom-anchored, so a query that matched
    nothing shrank the list and dropped the search field down the rail after it.
    Now the block is fixed and only the scroll area inside it changes. */
-.method-filter {
+.facet-filter {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -579,33 +635,39 @@ body {
   min-height: 0;
 }
 
-.method-filter__head {
+.facet-filter__head {
   display: flex;
   align-items: baseline;
   gap: var(--space-sm);
 }
 
+/* Pills have padding, so the head switches from baseline to centre when the
+   tabs are in it. */
+.facet-filter__head:has(.rail-tabs) {
+  align-items: center;
+}
+
 /* The count sits with the title; the chevron is pushed to the far edge. */
-.method-filter__count {
+.facet-filter__count {
   margin-right: auto;
 }
 
-.method-filter__head .panel-collapse-btn {
+.facet-filter__head .panel-collapse-btn {
   align-self: center;
 }
 
-.method-filter__count {
+.facet-filter__count {
   font-size: var(--fs-caption);
   color: var(--text2);
   font-variant-numeric: tabular-nums;
 }
 
-.method-filter__actions {
+.facet-filter__actions {
   display: flex;
   gap: var(--space-xs);
 }
 
-.method-filter__actions button {
+.facet-filter__actions button {
   padding: var(--space-2xs) var(--space-sm);
   border-radius: var(--radius-element);
   font-size: var(--fs-caption);
@@ -614,18 +676,18 @@ body {
   transition: background-color var(--t-micro) ease, color var(--t-micro) ease;
 }
 
-.method-filter__actions button {
+.facet-filter__actions button {
   border: 1px solid var(--border);
 }
 
-.method-filter__actions button:hover {
+.facet-filter__actions button:hover {
   background: var(--accent-subtle);
   color: var(--accent-strong);
 }
 
 /* Fills whatever the rail has left and scrolls inside itself, so the box keeps
    the same footprint whether it holds twenty rows or the no-matches line. */
-.method-filter__list {
+.facet-filter__list {
   flex: 1;
   overflow-y: auto;
   min-height: 96px;
@@ -634,7 +696,7 @@ body {
   gap: var(--space-sm);
 }
 
-.method-filter__group-head {
+.facet-filter__group-head {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
@@ -642,11 +704,11 @@ body {
   cursor: pointer;
 }
 
-.method-filter__group-head:hover .method-filter__group-label {
+.facet-filter__group-head:hover .facet-filter__group-label {
   color: var(--accent-strong);
 }
 
-.method-check {
+.facet-check {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
@@ -658,11 +720,11 @@ body {
   transition: background-color var(--t-micro) ease;
 }
 
-.method-check:hover {
+.facet-check:hover {
   background: var(--ghost-hover);
 }
 
-.method-check__label {
+.facet-check__label {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -671,14 +733,14 @@ body {
   cursor: pointer;
 }
 
-.method-check input {
+.facet-check input {
   flex-shrink: 0;
   margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
 }
 
-.method-check__name {
+.facet-check__name {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -1138,6 +1200,17 @@ body {
   margin-bottom: var(--space-sm);
   padding-bottom: var(--space-sm);
   border-bottom: 1px solid var(--border);
+}
+
+/* In the single-image wall the verdict shares the original's caption row.
+   Keeping one common header height makes every image start on the same line. */
+.gallery-grid .image-card__header {
+  min-height: 35px;
+  align-items: center;
+}
+
+.gallery-grid .image-card__header .prediction {
+  margin: calc(-1 * var(--space-2xs)) 0;
 }
 
 .image-card h3 {
@@ -1603,12 +1676,16 @@ body {
 
 .compare-matrix {
   gap: var(--space-lg);
+  /* A y-axis label, not a column of text. Rotated it needs the width of one
+     line, and the ~96px it used to hold go back to the model columns — which
+     is the scarce axis here, one more column per model checked. */
+  --compare-gutter: 28px;
 }
 
 .compare-header,
 .compare-row {
   display: grid;
-  grid-template-columns: repeat(var(--compare-columns, 1), minmax(220px, 1fr));
+  grid-template-columns: var(--compare-gutter) repeat(var(--compare-columns, 1), minmax(220px, 1fr));
   gap: var(--space-lg);
 }
 
@@ -1626,6 +1703,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
+  min-width: 0;
   font-size: var(--fs-label);
   font-weight: 600;
   line-height: 1.2;
@@ -1634,8 +1712,90 @@ body {
   color: var(--text2);
 }
 
+.compare-header__name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Always on screen, not summoned by hover: a control nobody can see is a
+   control nobody uses. It sits at --text3, quiet enough that the row of column
+   names still reads as a row of names, and comes up to full ink on hover. */
+.compare-header__hide {
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-body-sm);
+  line-height: 1;
+  color: var(--text3);
+  transition: background-color var(--t-micro) ease, color var(--t-micro) ease;
+}
+
+.compare-header__cell:hover .compare-header__hide {
+  color: var(--text2);
+}
+
+.compare-header__hide:hover {
+  background: var(--ghost-hover);
+  color: var(--text1);
+}
+
 .compare-row {
   align-items: start;
+  grid-template-rows: repeat(var(--compare-rows, 1), auto);
+  scroll-margin-top: calc(var(--chrome-h) + var(--renderbar-h) + 48px + var(--space-sm));
+}
+
+/* The method name is a property of the row, not of every cell in it: printed
+   once here instead of once per model. Same weight and tracking as the model
+   names in the header, because it is the other half of the same pair of axes. */
+.compare-row__method {
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-width: 0;
+  /* Centred against the band it names, the way an axis label sits against its
+     axis: the grid row is as tall as the maps, not as tall as this. */
+  align-self: center;
+  max-height: 100%;
+  font-size: var(--fs-label);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+
+/* Bottom-to-top, like the ylabel of a figure. Never wrapped: a second line
+   would widen the gutter back out, and the whole point is that it doesn't. */
+.compare-row__method-name {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  min-height: 0;
+  max-height: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Upright, and above the label rather than after it: a rotated hit target
+   reads as a mistake, and this is the one thing in the gutter you click. */
+.compare-row__method .info-dot {
+  order: -1;
+}
+
+.compare-row__empty {
+  grid-column: 2 / -1;
+  font-size: var(--fs-body-sm);
+  color: var(--text2);
 }
 
 /* No card and no hover lift — cells being compared must not move, and a
@@ -1647,10 +1807,65 @@ body {
   min-width: 0;
 }
 
+/* Column two, and it holds every method row: the thing being compared against
+   is one image, not one image per method. */
 .compare-cell--original {
+  grid-column: 2;
+  grid-row: 1 / -1;
   position: sticky;
   top: calc(var(--chrome-h) + var(--renderbar-h) + 48px);
   align-self: start;
+}
+
+/* Empty by design — it keeps the prediction badges out of the label gutter. */
+.compare-header__gutter,
+.compare-row__gutter {
+  grid-column: 1;
+}
+
+.compare-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.compare-nav__button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text2);
+  font: inherit;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.compare-nav__button:hover:not(:disabled) {
+  background: var(--surface2);
+  color: var(--accent);
+}
+
+.compare-nav__button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.compare-nav__button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.compare-nav__count {
+  min-width: 4ch;
+  color: var(--text2);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 /* ── Prediction ─────────────────────────────────────────────────
@@ -1671,6 +1886,13 @@ body {
   border-radius: var(--radius-pill);
   font-size: var(--fs-body-sm);
   line-height: 1.3;
+}
+
+/* Leading the card, the pill spaces itself downward instead of upward so it
+   sits flush with the top of the column, level with the other cards' captions. */
+.image-card .prediction {
+  margin-top: 0;
+  margin-bottom: var(--space-sm);
 }
 
 .prediction__icon {
@@ -1861,7 +2083,8 @@ body {
 
   .compare-header,
   .compare-row {
-    grid-template-columns: repeat(var(--compare-columns, 1), minmax(200px, 1fr));
+    grid-template-columns: var(--compare-gutter) repeat(var(--compare-columns, 1), minmax(200px, 1fr));
+    gap: var(--space-md);
   }
 }
 
@@ -1874,6 +2097,8 @@ body {
     /* The collapsed rail becomes a bar across the top of the content here, so
        what sticks under it measures from this instead of the chrome. */
     --panel-bar-h: 36px;
+    /* The mode tabs, fixed along the bottom edge. */
+    --mode-bar-h: 52px;
   }
 
   .topbar {
@@ -1908,9 +2133,31 @@ body {
     max-width: none;
   }
 
+  /* Navigation that scrolls away is navigation you have lost: the top bar goes
+     static here to give the maps the screen, so the three modes leave it and
+     become a bar at the bottom, where a thumb is anyway. */
   .mode-switcher {
-    order: 1;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 200;
     width: 100%;
+    gap: var(--space-xs);
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg);
+    padding: var(--space-xs) var(--space-xs) calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mode-switcher__tab {
+    flex: 1;
+    text-align: center;
+  }
+
+  /* Nothing may end up underneath the bar. */
+  .viewer-layout {
+    padding-bottom: calc(var(--mode-bar-h) + env(safe-area-inset-bottom, 0px));
   }
 
   /* Stacked, not side by side. Without this the rail and the content are two
@@ -1932,12 +2179,11 @@ body {
   /* Collapsed, the rail lies down. A 48px column of sideways type spends a
      tenth of a phone's width on one word and pushes the way back to the
      methods off the top of the screen; a bar across the content keeps it in
-     the reading order. Sticky, because the thing you want to change methods
-     from is a strip of maps a few screens long. */
+     the reading order. It scrolls away with everything else: pinned, it spent
+     a permanent 36px of a phone screen on a control you touch twice a session,
+     stacked under the render strip that is already pinned there. */
   .viewer-layout--collapsed .controls-panel {
-    position: sticky;
-    top: 0;
-    z-index: 120;
+    position: static;
     width: 100%;
     height: var(--panel-bar-h);
     padding: 0;
@@ -1965,24 +2211,48 @@ body {
     writing-mode: horizontal-tb;
   }
 
+  /* A bare arrow floating at the right edge, one row under the Class crumb,
+     read as part of the crumb. Here it is a bordered control that says what
+     it does, and the arrow points up because that is where the rail folds. */
+  .panel-collapse-btn {
+    border: 1px solid var(--border);
+    padding: var(--space-xs) var(--space-sm);
+    font-size: var(--fs-label);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .panel-collapse-btn__icon {
+    display: inline-block;
+    transform: rotate(90deg);
+    line-height: 1;
+  }
+
+  .panel-collapse-btn__label {
+    display: inline;
+  }
+
+  .context-card {
+    scroll-margin-top: var(--space-sm);
+  }
+
   .viewer-content,
   .viewer-layout--collapsed .viewer-content {
     margin-left: 0;
     width: 100%;
   }
 
-  /* The sidebar is stacked above the content here, so the render strip is
-     already the top of the scroll region: no offset to clear — except under
-     the collapsed bar, which is holding that spot. */
+  /* Nothing is pinned to the top of a phone screen any more. The overlay
+     switch and the colorbar are a setting you touch once and then read maps
+     for ten screens; sticky, they spent 110px of an 850px screen on it, and
+     the strip they left above themselves let the maps scroll through in the
+     gap. They scroll away with the rest of the chrome. */
   .render-bar {
-    top: 0;
+    position: static;
+    top: auto;
   }
 
-  .viewer-layout--collapsed .render-bar {
-    top: var(--panel-bar-h);
-  }
-
-  .method-filter__list {
+  .facet-filter__list {
     max-height: 240px;
   }
 
@@ -2014,13 +2284,6 @@ body {
     top: var(--renderbar-h);
   }
 
-  .compare-cell--original {
-    top: var(--renderbar-h);
-  }
-
-  .viewer-layout--collapsed .compare-cell--original {
-    top: calc(var(--renderbar-h) + var(--panel-bar-h));
-  }
 
   .model-grid {
     grid-template-columns: 1fr;
@@ -2030,16 +2293,68 @@ body {
     display: none;
   }
 
+  /* One column: the matrix unrolls into a list, so the gutter has nowhere to
+     go. The method name becomes a section heading over its own maps, and each
+     map names its model — grouped by method, which is what the labels imply. */
   .compare-row {
     grid-template-columns: 1fr;
+    grid-template-rows: none;
+    scroll-margin-top: var(--space-sm);
     border: 1px solid var(--border);
     border-radius: var(--radius-component);
     background: var(--surface1);
     padding: var(--space-sm);
   }
 
+  .compare-cell--original {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .compare-header__gutter,
+  .compare-row__gutter {
+    display: none;
+  }
+
+  /* One column, so the label is a section heading over its maps again — and a
+     heading is read across, not up. */
+  .compare-row__method {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: flex-start;
+    align-self: auto;
+    max-height: none;
+    padding-top: var(--space-xs);
+    border-top: 1px solid var(--border);
+  }
+
+  .compare-row__method-name {
+    writing-mode: horizontal-tb;
+    transform: none;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+  }
+
+  .compare-row__method .info-dot {
+    order: 0;
+  }
+
+  .compare-row__empty {
+    grid-column: auto;
+  }
+
   .compare-cell {
     position: relative;
+  }
+
+  /* Unrolled into a list, the original already sits directly above its maps.
+     Sticky here only made it ride down over the predictions — and once
+     .compare-cell above claimed position: relative, the leftover `top` turned
+     into a plain 63px nudge that dragged it over the first heatmap. Both go. */
+  .compare-cell--original {
+    position: static;
+    top: auto;
   }
 
   /* The column header collapses into a micro-label on each cell. */

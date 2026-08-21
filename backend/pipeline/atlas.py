@@ -58,7 +58,7 @@ def evaluate_faithfulness(
             metric.update(mode=mode, n_steps=n_steps)
             scores[mode] = float(metric.compute()[0].item())
     if "morph" in metrics:
-        metric = MorphScore(model, inputs, heatmap, target, blur_sigma=blur_sigma)
+        metric = MorphScore(model, inputs, heatmap, target, blur_sigma=config.MORPH_BLUR_SIGMA)
         metric.update(mode="erode", n_steps=n_steps)
         scores["morph"] = float(metric.compute()[0].item())
     if "segment" in metrics:

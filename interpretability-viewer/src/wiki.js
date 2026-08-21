@@ -280,7 +280,7 @@ export const WIKI_SECTIONS = [
         ],
         links: [
           { label: 'Paper (arXiv 1311.2901)', href: 'https://arxiv.org/abs/1311.2901' },
-          { label: 'Sanity checks (arXiv 1810.03292)', href: 'https://arxiv.org/abs/1810.03292' },
+          { label: 'Captum: Deconvolution', href: `${CAPTUM}deconvolution.html` },
         ],
       },
       {
@@ -423,6 +423,7 @@ export const WIKI_SECTIONS = [
           ['Limit', 'Runtime grows with the number of segments'],
         ],
         links: [
+          { label: 'Paper (arXiv 1705.07874)', href: 'https://arxiv.org/abs/1705.07874' },
           { label: 'Captum: ShapleyValueSampling', href: `${CAPTUM}shapley_value_sampling.html` },
         ],
       },
