@@ -18,6 +18,14 @@ def run_generation(args: Namespace) -> None:
         raise SystemExit("--dataset must not be empty.")
     if args.num_samples <= 0:
         raise SystemExit("--num-samples must be a positive integer.")
+    start_index = getattr(args, "start_index", 0)
+    if start_index < 0:
+        raise SystemExit("--start-index must not be negative.")
+    if start_index >= args.num_samples:
+        raise SystemExit(
+            f"--start-index ({start_index}) must be below --num-samples "
+            f"({args.num_samples}); the window [start, num-samples) would be empty."
+        )
     if args.export_batch_images <= 0:
         raise SystemExit("--export-batch-images must be a positive integer.")
 
@@ -75,6 +83,12 @@ def run_generation(args: Namespace) -> None:
                     f"Skipping {method_name}: {existing_count} outputs already exist."
                 )
             else:
+                if existing_count < start_index:
+                    print(
+                        f"Warning: {method_name} has {existing_count} outputs but the "
+                        f"window starts at {start_index}; samples "
+                        f"{existing_count}-{start_index - 1} will stay missing."
+                    )
                 filtered_methods.append(method)
         interp_methods = filtered_methods
 
@@ -91,6 +105,7 @@ def run_generation(args: Namespace) -> None:
     buffer = []
     for record in atlas.stream(
         num_samples=args.num_samples,
+        start_index=start_index,
         output_dir=config.OUTPUT_IMAGES_DIR,
         model_name=args.model,
         dataset_name=dataset_name,
