@@ -491,6 +491,8 @@ function MiniImage({ caption, captionActions, src, alt, missingText = 'Not avail
   // method by name and then look at what it produced, so the label leads.
   return (
     <figure className="mini-image">
+      {/* No caption when the name lives on the axis instead of on the cell —
+          the comparison matrix labels its method rows once, in the gutter. */}
       {(caption || captionActions) && (
         <figcaption>
           {caption && <span className="mini-image__name">{caption}</span>}
@@ -1371,7 +1373,8 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
         const methodRows = compareMethodRows(methods, row.cells);
         // The original spans every method row, so the grid needs those rows to
         // be explicit — an implicit grid has nothing for `1 / -1` to reach.
-        const rowStyle = { ...style, '--compare-rows': methodRows.length + 1 };
+        // Two rows per method: the name, then the band of maps it names.
+        const rowStyle = { ...style, '--compare-rows': methodRows.length * 2 + 1 };
         return (
           <div
             key={row.imageId} className="compare-row" style={rowStyle}
@@ -1411,16 +1414,18 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
             )}
             {methodRows.map((method) => (
               <Fragment key={method}>
+                <h4 className="compare-row__method">
+                  <span className="compare-row__method-name">{method}</span>
+                  <InfoDot kind="method" id={method} label={method} />
+                </h4>
                 {row.cells.map((cell) => (
                   <div key={`${method}__${cell.model}`} className="compare-cell compare-cell--map" data-model={cell.model}>
                     <MiniImage
-                      caption={method}
                       src={cell.record?.outputs?.[method]}
                       originalSrc={cell.record?.originalUrl}
                       alt={`${method} for image ${row.imageId} on ${cell.model}`}
                       missingText={`No ${method} map`}
                       metrics={cell.record?.interpretabilityMetrics?.[method]}
-                      wikiKind="method"
                     />
                   </div>
                 ))}
