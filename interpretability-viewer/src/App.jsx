@@ -465,7 +465,7 @@ function MetricBadges({ metrics }) {
     lif: 'Least Important First AUC',
     morph: 'Morphological faithfulness AUC',
     segment: 'Segment-wise deletion AUC',
-    infidelity: 'Infidelity (lower is better)',
+    fidelity: 'Fidelity relative to a zero attribution (higher is better)',
   };
   const items = Object.entries(definitions)
     .map(([name, title]) => ({ name, title, rawValue: metrics?.[name] }))
@@ -726,6 +726,14 @@ function uniqueWikiMethods(methodOptions, activeMethod) {
   return [...grouped.values()];
 }
 
+// Models have one entry each, so the chip list is just the documented ones.
+function wikiEntryOptions(kind, ids) {
+  return ids
+    .map((id) => [id, lookupWiki(kind, id)])
+    .filter(([, entry]) => entry)
+    .map(([id, entry]) => ({ id, label: entry.title ?? id }));
+}
+
 /* The subject of the screen, stated above the maps: what dataset, what model,
    what method. It replaces the info dots that used to hang off the dataset and
    model crumbs — the answer is now on the page instead of one hover away, and
@@ -743,21 +751,25 @@ const CONTEXT_TABS = [
 
 function ContextCard({
   dataset, model, method, methodOptions = [], onMethod,
-  tab, onTab, expanded, onExpand, hiddenKinds,
+  modelOptions = [], onModel,
+  tab, onTab, expanded, onExpand,
 }) {
   const ids = { dataset, model, method };
-  const wikiMethodOptions = uniqueWikiMethods(methodOptions, method);
+  // Methods and models ask the same question of the card — "which of the ones
+  // on screen am I reading?" — so both answer it with the same chip row.
+  const pickers = {
+    method: { options: uniqueWikiMethods(methodOptions, method), active: method, onPick: onMethod },
+    model: { options: wikiEntryOptions('model', modelOptions), active: model, onPick: onModel },
+  };
 
-  // A tab exists only when its subject is both selectable here and documented —
-  // "Across Models" has no single model, and a dataset with no entry would open
-  // an empty card.
-  const tabs = CONTEXT_TABS.filter((t) =>
-    !hiddenKinds?.includes(t.kind) && lookupWiki(t.kind, ids[t.kind])
-  );
+  // A tab exists only when its subject is documented: a dataset with no entry
+  // would open an empty card.
+  const tabs = CONTEXT_TABS.filter((t) => lookupWiki(t.kind, ids[t.kind]));
   if (!tabs.length) return null;
 
   const active = tabs.find((t) => t.kind === tab) ?? tabs[0];
   const entry = lookupWiki(active.kind, ids[active.kind]);
+  const picker = pickers[active.kind];
 
   return (
     <section className="context-card" aria-label="Current selection reference">
@@ -773,15 +785,15 @@ function ContextCard({
       </nav>
 
       <div className="context-card__body">
-        {/* Which method the card is reading. Only when more than one is
-            checked — with a single method the tab label already says it. */}
-        {active.kind === 'method' && wikiMethodOptions.length > 1 && (
+        {/* Which one of them the card is reading. Only when more than one is
+            checked — with a single one the tab label already says it. */}
+        {picker?.onPick && picker.options.length > 1 && (
           <div className="context-card__picker">
-            {wikiMethodOptions.map(({ id, label }) => (
+            {picker.options.map(({ id, label }) => (
               <button
-                key={label} type="button"
-                className={`wiki-chip${id === method ? ' is-on' : ''}`}
-                onClick={() => onMethod(id)}
+                key={id} type="button"
+                className={`wiki-chip${id === picker.active ? ' is-on' : ''}`}
+                onClick={() => picker.onPick(id)}
               >{label}</button>
             ))}
           </div>
@@ -1606,6 +1618,7 @@ function ModelForm({ outputStructure }) {
   const [contextOpen, setContextOpen] = useState(false);
   const [contextShown, setContextShown] = useState(true);
   const [pickedMethod, setPickedMethod] = useState(null);
+  const [pickedModel, setPickedModel] = useState(null);
   // A method named from the sidebar may not be checked, so it is enough that
   // it be documented — otherwise fall back to the first one on screen.
   const contextMethod = pickedMethod && lookupWiki('method', pickedMethod)
@@ -1620,6 +1633,7 @@ function ModelForm({ outputStructure }) {
       setContextOpen(true);
       if (kind) setContextTab(kind);
       if (kind === 'method' && id) setPickedMethod(id);
+      if (kind === 'model' && id) setPickedModel(id);
       // The card is pinned to the top of the content and the dot that aims it
       // can be several screens below. On a phone the answer travels.
       if (isPhone()) scrollIntoViewSoon('.context-card');
@@ -1636,7 +1650,7 @@ function ModelForm({ outputStructure }) {
     lastSelection.current = { model: effectiveModel, dataset: effectiveDataset, methods: selectedMethods };
     if (prev.model == null && prev.dataset == null) return; // first pass, nothing was touched
     if (effectiveModel !== prev.model) setContextTab('model');
-    else if (effectiveDataset !== prev.dataset) { setContextTab('dataset'); setPickedMethod(null); }
+    else if (effectiveDataset !== prev.dataset) { setContextTab('dataset'); setPickedMethod(null); setPickedModel(null); }
     else {
       const added = selectedMethods.filter((m) => !prev.methods.includes(m));
       if (added.length === 1) { setContextTab('method'); setPickedMethod(added[0]); }
@@ -1733,6 +1747,13 @@ function ModelForm({ outputStructure }) {
   // is a single choice and lives in the selection bar, so the tab would be a
   // second control for a question already answered.
   const showModelFacet = vs.mode === 'class_compare';
+
+  // Where the model is a column rather than a single choice, the card reads the
+  // one that was last named — a column header dot, a chip, the rail — and
+  // otherwise the first column on screen.
+  const contextModel = showModelFacet
+    ? (pickedModel && selectedModels.includes(pickedModel) ? pickedModel : selectedModels[0] ?? null)
+    : effectiveModel;
   const railTabs = showModelFacet ? (
     <RailTabs
       value={facet} onChange={setFacet}
@@ -1819,11 +1840,12 @@ function ModelForm({ outputStructure }) {
             the maps they act on. */}
         {contextShown && (
           <ContextCard
-            dataset={effectiveDataset} model={effectiveModel} method={contextMethod}
+            dataset={effectiveDataset} model={contextModel} method={contextMethod}
             methodOptions={selectedMethods} onMethod={setPickedMethod}
+            modelOptions={showModelFacet ? selectedModels : []}
+            onModel={showModelFacet ? setPickedModel : null}
             tab={contextTab} onTab={setContextTab}
             expanded={contextOpen} onExpand={setContextOpen}
-            hiddenKinds={vs.mode === 'class_compare' ? ['model'] : undefined}
           />
         )}
 
