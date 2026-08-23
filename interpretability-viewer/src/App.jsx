@@ -1317,9 +1317,15 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
       if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName))) return;
 
       const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
-      const delta = plainKey && !event.shiftKey && event.key.toLowerCase() === 'j'
+      // Two ways to walk the rows: J/K for the keyboard-first reader, and the
+      // arrows — left/right because the rows read as a filmstrip of images,
+      // shift+up/down because the page itself scrolls vertically.
+      const forward = ['j', 'arrowright'];
+      const backward = ['k', 'arrowleft'];
+      const key = event.key.toLowerCase();
+      const delta = plainKey && !event.shiftKey && forward.includes(key)
         ? 1
-        : plainKey && !event.shiftKey && event.key.toLowerCase() === 'k'
+        : plainKey && !event.shiftKey && backward.includes(key)
           ? -1
           : plainKey && event.shiftKey && event.key === 'ArrowDown'
             ? 1
@@ -1402,12 +1408,12 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
                   <button
                     type="button" className="compare-nav__button"
                     disabled={rowIndex === 0} onClick={() => scrollToRow(rowIndex - 1)}
-                    aria-label="Previous image" title="Previous image · K"
+                    aria-label="Previous image" title="Previous image · K or ←"
                   >&#8249;</button>
                   <button
                     type="button" className="compare-nav__button"
                     disabled={rowIndex === matrix.rows.length - 1} onClick={() => scrollToRow(rowIndex + 1)}
-                    aria-label="Next image" title="Next image · J"
+                    aria-label="Next image" title="Next image · J or →"
                   >&#8250;</button>
                   </nav>
                 )}
@@ -1487,6 +1493,29 @@ function ModelForm({ outputStructure }) {
       node?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block });
     }, 0);
   };
+  // The card is pinned to the top of the content column and the dot that aims
+  // it can be several screens below, so opening it goes to it — on any width,
+  // not just where the rail lies down. scrollIntoView on its own would tuck the
+  // top of the card under the sticky bars, so the landing point clears them.
+  const scrollContextCardIntoView = () => {
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => {
+      const card = document.querySelector('.context-card');
+      if (!card) return;
+      const offset = ['.topbar', '.selection-bar']
+        .map((selector) => document.querySelector(selector)?.getBoundingClientRect())
+        .filter((rect) => rect?.height > 0)
+        .reduce((sum, rect) => sum + rect.height, 0) + 8;
+      const box = card.getBoundingClientRect();
+      // Already reading it: a nudge of a few pixels is worse than staying put.
+      if (box.top >= offset && box.bottom <= window.innerHeight) return;
+      window.scrollTo({
+        top: Math.max(0, box.top + window.scrollY - offset),
+        behavior: reduceMotion ? 'auto' : 'smooth',
+      });
+    }, 0);
+  };
+
   const expandPanel = () => {
     setPanelCollapsed(false);
     if (isPhone()) scrollIntoViewSoon(panelRef.current);
@@ -1634,9 +1663,7 @@ function ModelForm({ outputStructure }) {
       if (kind) setContextTab(kind);
       if (kind === 'method' && id) setPickedMethod(id);
       if (kind === 'model' && id) setPickedModel(id);
-      // The card is pinned to the top of the content and the dot that aims it
-      // can be several screens below. On a phone the answer travels.
-      if (isPhone()) scrollIntoViewSoon('.context-card');
+      scrollContextCardIntoView();
     },
   }), []);
 
