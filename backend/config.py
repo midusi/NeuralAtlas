@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from pathlib import Path
 
 DEFAULT_MODEL_NAME = "alexnet"
@@ -21,6 +20,7 @@ FIDELITY_N_PERTURB_SAMPLES = 25
 FIDELITY_NOISE_STD = 0.2
 FIDELITY_MAX_EXAMPLES_PER_BATCH = 5
 FIDELITY_RANDOM_SEED = 0
+METRIC_BATCH_SIZE = 32
 OUTPUT_IMAGES_BASE_URL = "/outputs/images"
 ATTRIBUTION_ENCODING = {
     "format": "normalized_grayscale",
