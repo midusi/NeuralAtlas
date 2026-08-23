@@ -14,7 +14,7 @@ Per (model, step) with --chunk N each step covers the half-open window it adds -
 
 Configuration comes from `.env` (see `.env.example`):
   HF_TOKEN                 write token for the attributions repo (required)
-  HF_ATTRIBUTIONS_REPO     default Matgc04/neuralatlas-attributions
+  HF_ATTRIBUTIONS_REPO     base repo, default Matgc04/neuralatlas-attributions
 
 Examples:
   uv run python scripts/run_sweep.py --dry-run
@@ -71,6 +71,24 @@ def with_retries(label: str, action: Callable[[], T], attempts: int = 4) -> T:
             log(f"warn: {label} failed ({error!r}); retrying in {delay}s")
             time.sleep(delay)
     raise AssertionError("unreachable")
+
+
+def model_repo_id(base_repo: str, model: str) -> str:
+    return f"{base_repo}-{model}"
+
+
+def parse_output_filename(filename: str) -> tuple[str, str, str, str, str]:
+    path = Path(filename)
+    parts = path.stem.split("__")
+    if len(parts) != 5 or not path.suffix:
+        raise ValueError(f"Invalid attribution filename: {filename}")
+    model, dataset, class_id, image_id, method = parts
+    return model, dataset, class_id, image_id, method
+
+
+def remote_image_path(filename: str) -> str:
+    _, dataset, class_id, _, _ = parse_output_filename(filename)
+    return f"images/{dataset}/{class_id}/{filename}"
 
 
 # ------------------------------------------------------------------------- dataset
@@ -151,9 +169,8 @@ def sync_run_metadata(api, repo_id: str, model: str, dataset: str) -> int:
         f"runs/{model}/{dataset}/images.json",
         f"runs/{model}/{dataset}/summary.json",
     ]
-    downloaded = 0
-    for path in paths:
-        exists = with_retries(
+    checkpoint_exists = [
+        with_retries(
             f"check remote {path}",
             lambda path=path: api.file_exists(
                 repo_id=repo_id,
@@ -161,8 +178,14 @@ def sync_run_metadata(api, repo_id: str, model: str, dataset: str) -> int:
                 filename=path,
             ),
         )
-        if not exists:
-            continue
+        for path in paths
+    ]
+    if not all(checkpoint_exists):
+        for path in paths:
+            (REPO_ROOT / config.OUTPUT_ROOT / path).unlink(missing_ok=True)
+        return 0
+
+    for path in paths:
         with_retries(
             f"download remote {path}",
             lambda path=path: api.hf_hub_download(
@@ -173,8 +196,7 @@ def sync_run_metadata(api, repo_id: str, model: str, dataset: str) -> int:
                 force_download=True,
             ),
         )
-        downloaded += 1
-    return downloaded
+    return len(paths)
 
 
 # --------------------------------------------------------------------------- steps
@@ -211,31 +233,35 @@ def step_image_files(model: str, dataset: str, image_ext: str) -> list[Path]:
 
 def upload_step(api, repo_id: str, model: str, label: str, dataset: str, image_ext: str) -> int:
     """Upload this worker's images and run metadata, never shared global metadata."""
+    from huggingface_hub import CommitOperationAdd
+
     files = step_image_files(model, dataset, image_ext)
-    if files:
-        with_retries(
-            f"upload images for {label}",
-            lambda: api.upload_folder(
-                repo_id=repo_id,
-                repo_type="dataset",
-                folder_path=str(REPO_ROOT / config.OUTPUT_IMAGES_DIR),
-                path_in_repo="images",
-                allow_patterns=[f"{model}__{dataset}__*.{image_ext}"],
-                commit_message=f"attributions: {label} ({len(files)} files)",
-            ),
+    operations = []
+    for path in files:
+        parsed_model, parsed_dataset, _, _, _ = parse_output_filename(path.name)
+        if (parsed_model, parsed_dataset) != (model, dataset):
+            raise ValueError(f"Attribution file does not belong to {model}/{dataset}: {path.name}")
+        operations.append(
+            CommitOperationAdd(path_in_repo=remote_image_path(path.name), path_or_fileobj=path)
         )
+
+    run_path = Path("runs") / model / dataset
+    for filename in ("images.json", "summary.json"):
+        path_in_repo = run_path / filename
+        operations.append(
+            CommitOperationAdd(
+                path_in_repo=path_in_repo.as_posix(),
+                path_or_fileobj=REPO_ROOT / config.OUTPUT_ROOT / path_in_repo,
+            )
+        )
+
     with_retries(
-        f"upload metadata for {label}",
-        lambda: api.upload_folder(
+        f"upload checkpoint for {label}",
+        lambda: api.create_commit(
             repo_id=repo_id,
             repo_type="dataset",
-            folder_path=str(REPO_ROOT / config.OUTPUT_ROOT),
-            path_in_repo="",
-            allow_patterns=[
-                f"runs/{model}/{dataset}/images.json",
-                f"runs/{model}/{dataset}/summary.json",
-            ],
-            commit_message=f"metadata: {label}",
+            operations=operations,
+            commit_message=f"checkpoint: {label}",
         ),
     )
     return len(files)
@@ -263,9 +289,9 @@ def parse_args() -> argparse.Namespace:
                         help="Upper bound on samples per model (default: the whole dataset). "
                              "Samples run in class order, so a partial total only covers the "
                              "lowest class ids.")
-    parser.add_argument("--chunk", type=int, default=100,
+    parser.add_argument("--chunk", type=int, default=5,
                         help="How much the --num-samples target grows per run/upload/cleanup "
-                             "cycle (default: 100)")
+                             "cycle (default: 5)")
     parser.add_argument("--image-ext", default=config.DEFAULT_IMAGE_EXT,
                         help=f"Attribution image format (default: {config.DEFAULT_IMAGE_EXT})")
     parser.add_argument("--metrics", nargs="*", default=list(config.FAITHFULNESS_METRICS),
@@ -291,7 +317,10 @@ def main() -> None:
 
     load_env(REPO_ROOT / ".env")
     token = os.getenv("HF_TOKEN")
-    attributions_repo = os.getenv("HF_ATTRIBUTIONS_REPO", DEFAULT_ATTRIBUTIONS_REPO)
+    attributions_repo_base = os.getenv("HF_ATTRIBUTIONS_REPO", DEFAULT_ATTRIBUTIONS_REPO)
+    model_repos = {
+        model: model_repo_id(attributions_repo_base, model) for model in args.models
+    }
     upload = not args.no_upload
     cleanup = upload and not args.keep_local
 
@@ -303,8 +332,9 @@ def main() -> None:
             raise SystemExit("HF_TOKEN is not set (put it in .env), or pass --no-upload.")
         api = HfApi(token=token)
         # Fail fast on a bad token or a missing repo rather than after hours of compute.
-        api.repo_info(repo_id=attributions_repo, repo_type="dataset")
-        log(f"Uploading to hf.co/datasets/{attributions_repo} as {api.whoami().get('name', '?')}")
+        for repo_id in model_repos.values():
+            api.repo_info(repo_id=repo_id, repo_type="dataset")
+        log(f"Validated {len(model_repos)} model repos as {api.whoami().get('name', '?')}")
 
     available = ensure_dataset(args.dataset, dry_run=args.dry_run)
     total = min(args.total, available) if args.total else available
@@ -323,20 +353,22 @@ def main() -> None:
 
     failures: list[str] = []
     for model in args.models:
+        model_repo = model_repos[model]
         # An interrupted or upload-failed run leaves images on disk that the run JSON
         # already counts as done. That local checkpoint is newer than HF, so flush it
         # before considering a remote restore. With no pending files, HF is the source
         # of truth and lets a fresh GPU box resume an existing run.
-        pending = step_image_files(model, args.dataset, args.image_ext)
-        if pending and upload:
-            log(f"Reconciling {len(pending)} leftover files for {model}")
-            upload_step(api, attributions_repo, model, f"{model} resume", args.dataset, args.image_ext)
-            if cleanup:
-                cleanup_step(model, args.dataset, args.image_ext)
-        elif upload:
-            downloaded = sync_run_metadata(api, attributions_repo, model, args.dataset)
-            if downloaded:
-                log(f"Restored {downloaded} checkpoint files from HF for {model}")
+        if upload:
+            pending = step_image_files(model, args.dataset, args.image_ext)
+            if pending:
+                log(f"Reconciling {len(pending)} leftover files for {model}")
+                upload_step(api, model_repo, model, f"{model} resume", args.dataset, args.image_ext)
+                if cleanup:
+                    cleanup_step(model, args.dataset, args.image_ext)
+            else:
+                downloaded = sync_run_metadata(api, model_repo, model, args.dataset)
+                if downloaded:
+                    log(f"Restored {downloaded} checkpoint files from HF for {model}")
 
         done = completed_samples(repository, model, args.dataset, args.image_ext)
         log(f"Starting {model} from remote-confirmed checkpoint {done}/{total}")
@@ -357,7 +389,7 @@ def main() -> None:
                 )
                 if upload:
                     uploaded = upload_step(
-                        api, attributions_repo, model, label, args.dataset, args.image_ext
+                        api, model_repo, model, label, args.dataset, args.image_ext
                     )
                     log(f"Uploaded {uploaded} attribution files for {label}")
             except Exception as error:
