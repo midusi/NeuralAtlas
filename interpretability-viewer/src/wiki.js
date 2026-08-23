@@ -542,7 +542,7 @@ export const WIKI_SECTIONS = [
       },
       {
         id: 'fidelity',
-        title: 'Fidelity',
+        title: 'Fidelity — relative error',
         tags: ['Faithfulness'],
         summary: 'The relative reduction in prediction error over a zero attribution under random perturbations.',
         differs: 'It normalizes infidelity against an explanation that always predicts zero change: 1 is exact, 0 matches that baseline, and negative values are worse.',
