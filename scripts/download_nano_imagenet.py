@@ -50,15 +50,18 @@ def download_source(cache_dir: Path) -> Path:
     """Download ImageNet-mini from Kaggle and return the extracted root."""
     kaggle_dir = Path.home() / ".kaggle"
     has_creds = (
-        os.environ.get("KAGGLE_KEY")
+        os.environ.get("KAGGLE_API_TOKEN")
+        or os.environ.get("KAGGLE_KEY")
         or (kaggle_dir / "kaggle.json").exists()      # classic API token
         or (kaggle_dir / "access_token").exists()     # `kaggle` CLI sign-in
+        or os.environ.get("KAGGLE_KERNEL_RUN_TYPE")    # authenticated Kaggle notebook
     )
     if not has_creds:
         raise SystemExit(
             "Kaggle credentials not found.\n"
             "  Sign in with the Kaggle CLI, or put an API token at ~/.kaggle/kaggle.json\n"
-            "  (Kaggle > Settings > Create New Token), or export KAGGLE_USERNAME / KAGGLE_KEY.\n"
+            "  (Kaggle > Settings > Create New Token), or export KAGGLE_USERNAME / "
+            "KAGGLE_API_TOKEN (or KAGGLE_KEY).\n"
             "  Alternatively pass --src with an already-extracted ImageNet-mini directory."
         )
 
