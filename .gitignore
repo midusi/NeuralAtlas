@@ -199,6 +199,9 @@ dist-ssr
 worker/
 .dev.vars
 
+# kaggle notebooks
+kaggle/*
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -465,7 +465,7 @@ function MetricBadges({ metrics }) {
     lif: 'Least Important First AUC',
     morph: 'Morphological faithfulness AUC',
     segment: 'Segment-wise deletion AUC',
-    infidelity: 'Infidelity (lower is better)',
+    fidelity: 'Fidelity relative to a zero attribution (higher is better)',
   };
   const items = Object.entries(definitions)
     .map(([name, title]) => ({ name, title, rawValue: metrics?.[name] }))
@@ -491,6 +491,8 @@ function MiniImage({ caption, captionActions, src, alt, missingText = 'Not avail
   // method by name and then look at what it produced, so the label leads.
   return (
     <figure className="mini-image">
+      {/* No caption when the name lives on the axis instead of on the cell —
+          the comparison matrix labels its method rows once, in the gutter. */}
       {(caption || captionActions) && (
         <figcaption>
           {caption && <span className="mini-image__name">{caption}</span>}
@@ -724,6 +726,14 @@ function uniqueWikiMethods(methodOptions, activeMethod) {
   return [...grouped.values()];
 }
 
+// Models have one entry each, so the chip list is just the documented ones.
+function wikiEntryOptions(kind, ids) {
+  return ids
+    .map((id) => [id, lookupWiki(kind, id)])
+    .filter(([, entry]) => entry)
+    .map(([id, entry]) => ({ id, label: entry.title ?? id }));
+}
+
 /* The subject of the screen, stated above the maps: what dataset, what model,
    what method. It replaces the info dots that used to hang off the dataset and
    model crumbs — the answer is now on the page instead of one hover away, and
@@ -741,21 +751,25 @@ const CONTEXT_TABS = [
 
 function ContextCard({
   dataset, model, method, methodOptions = [], onMethod,
-  tab, onTab, expanded, onExpand, hiddenKinds,
+  modelOptions = [], onModel,
+  tab, onTab, expanded, onExpand,
 }) {
   const ids = { dataset, model, method };
-  const wikiMethodOptions = uniqueWikiMethods(methodOptions, method);
+  // Methods and models ask the same question of the card — "which of the ones
+  // on screen am I reading?" — so both answer it with the same chip row.
+  const pickers = {
+    method: { options: uniqueWikiMethods(methodOptions, method), active: method, onPick: onMethod },
+    model: { options: wikiEntryOptions('model', modelOptions), active: model, onPick: onModel },
+  };
 
-  // A tab exists only when its subject is both selectable here and documented —
-  // "Across Models" has no single model, and a dataset with no entry would open
-  // an empty card.
-  const tabs = CONTEXT_TABS.filter((t) =>
-    !hiddenKinds?.includes(t.kind) && lookupWiki(t.kind, ids[t.kind])
-  );
+  // A tab exists only when its subject is documented: a dataset with no entry
+  // would open an empty card.
+  const tabs = CONTEXT_TABS.filter((t) => lookupWiki(t.kind, ids[t.kind]));
   if (!tabs.length) return null;
 
   const active = tabs.find((t) => t.kind === tab) ?? tabs[0];
   const entry = lookupWiki(active.kind, ids[active.kind]);
+  const picker = pickers[active.kind];
 
   return (
     <section className="context-card" aria-label="Current selection reference">
@@ -771,15 +785,15 @@ function ContextCard({
       </nav>
 
       <div className="context-card__body">
-        {/* Which method the card is reading. Only when more than one is
-            checked — with a single method the tab label already says it. */}
-        {active.kind === 'method' && wikiMethodOptions.length > 1 && (
+        {/* Which one of them the card is reading. Only when more than one is
+            checked — with a single one the tab label already says it. */}
+        {picker?.onPick && picker.options.length > 1 && (
           <div className="context-card__picker">
-            {wikiMethodOptions.map(({ id, label }) => (
+            {picker.options.map(({ id, label }) => (
               <button
-                key={label} type="button"
-                className={`wiki-chip${id === method ? ' is-on' : ''}`}
-                onClick={() => onMethod(id)}
+                key={id} type="button"
+                className={`wiki-chip${id === picker.active ? ' is-on' : ''}`}
+                onClick={() => picker.onPick(id)}
               >{label}</button>
             ))}
           </div>
@@ -1303,9 +1317,15 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
       if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName))) return;
 
       const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
-      const delta = plainKey && !event.shiftKey && event.key.toLowerCase() === 'j'
+      // Two ways to walk the rows: J/K for the keyboard-first reader, and the
+      // arrows — left/right because the rows read as a filmstrip of images,
+      // shift+up/down because the page itself scrolls vertically.
+      const forward = ['j', 'arrowright'];
+      const backward = ['k', 'arrowleft'];
+      const key = event.key.toLowerCase();
+      const delta = plainKey && !event.shiftKey && forward.includes(key)
         ? 1
-        : plainKey && !event.shiftKey && event.key.toLowerCase() === 'k'
+        : plainKey && !event.shiftKey && backward.includes(key)
           ? -1
           : plainKey && event.shiftKey && event.key === 'ArrowDown'
             ? 1
@@ -1371,7 +1391,8 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
         const methodRows = compareMethodRows(methods, row.cells);
         // The original spans every method row, so the grid needs those rows to
         // be explicit — an implicit grid has nothing for `1 / -1` to reach.
-        const rowStyle = { ...style, '--compare-rows': methodRows.length + 1 };
+        // Two rows per method: the name, then the band of maps it names.
+        const rowStyle = { ...style, '--compare-rows': methodRows.length * 2 + 1 };
         return (
           <div
             key={row.imageId} className="compare-row" style={rowStyle}
@@ -1387,12 +1408,12 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
                   <button
                     type="button" className="compare-nav__button"
                     disabled={rowIndex === 0} onClick={() => scrollToRow(rowIndex - 1)}
-                    aria-label="Previous image" title="Previous image · K"
+                    aria-label="Previous image" title="Previous image · K or ←"
                   >&#8249;</button>
                   <button
                     type="button" className="compare-nav__button"
                     disabled={rowIndex === matrix.rows.length - 1} onClick={() => scrollToRow(rowIndex + 1)}
-                    aria-label="Next image" title="Next image · J"
+                    aria-label="Next image" title="Next image · J or →"
                   >&#8250;</button>
                   </nav>
                 )}
@@ -1411,16 +1432,18 @@ function ClassCompareView({ matrix, methods, ready, labels, onHideModel, totalMo
             )}
             {methodRows.map((method) => (
               <Fragment key={method}>
+                <h4 className="compare-row__method">
+                  <span className="compare-row__method-name">{method}</span>
+                  <InfoDot kind="method" id={method} label={method} />
+                </h4>
                 {row.cells.map((cell) => (
                   <div key={`${method}__${cell.model}`} className="compare-cell compare-cell--map" data-model={cell.model}>
                     <MiniImage
-                      caption={method}
                       src={cell.record?.outputs?.[method]}
                       originalSrc={cell.record?.originalUrl}
                       alt={`${method} for image ${row.imageId} on ${cell.model}`}
                       missingText={`No ${method} map`}
                       metrics={cell.record?.interpretabilityMetrics?.[method]}
-                      wikiKind="method"
                     />
                   </div>
                 ))}
@@ -1470,6 +1493,29 @@ function ModelForm({ outputStructure }) {
       node?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block });
     }, 0);
   };
+  // The card is pinned to the top of the content column and the dot that aims
+  // it can be several screens below, so opening it goes to it — on any width,
+  // not just where the rail lies down. scrollIntoView on its own would tuck the
+  // top of the card under the sticky bars, so the landing point clears them.
+  const scrollContextCardIntoView = () => {
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => {
+      const card = document.querySelector('.context-card');
+      if (!card) return;
+      const offset = ['.topbar', '.selection-bar']
+        .map((selector) => document.querySelector(selector)?.getBoundingClientRect())
+        .filter((rect) => rect?.height > 0)
+        .reduce((sum, rect) => sum + rect.height, 0) + 8;
+      const box = card.getBoundingClientRect();
+      // Already reading it: a nudge of a few pixels is worse than staying put.
+      if (box.top >= offset && box.bottom <= window.innerHeight) return;
+      window.scrollTo({
+        top: Math.max(0, box.top + window.scrollY - offset),
+        behavior: reduceMotion ? 'auto' : 'smooth',
+      });
+    }, 0);
+  };
+
   const expandPanel = () => {
     setPanelCollapsed(false);
     if (isPhone()) scrollIntoViewSoon(panelRef.current);
@@ -1601,6 +1647,7 @@ function ModelForm({ outputStructure }) {
   const [contextOpen, setContextOpen] = useState(false);
   const [contextShown, setContextShown] = useState(true);
   const [pickedMethod, setPickedMethod] = useState(null);
+  const [pickedModel, setPickedModel] = useState(null);
   // A method named from the sidebar may not be checked, so it is enough that
   // it be documented — otherwise fall back to the first one on screen.
   const contextMethod = pickedMethod && lookupWiki('method', pickedMethod)
@@ -1615,9 +1662,8 @@ function ModelForm({ outputStructure }) {
       setContextOpen(true);
       if (kind) setContextTab(kind);
       if (kind === 'method' && id) setPickedMethod(id);
-      // The card is pinned to the top of the content and the dot that aims it
-      // can be several screens below. On a phone the answer travels.
-      if (isPhone()) scrollIntoViewSoon('.context-card');
+      if (kind === 'model' && id) setPickedModel(id);
+      scrollContextCardIntoView();
     },
   }), []);
 
@@ -1631,7 +1677,7 @@ function ModelForm({ outputStructure }) {
     lastSelection.current = { model: effectiveModel, dataset: effectiveDataset, methods: selectedMethods };
     if (prev.model == null && prev.dataset == null) return; // first pass, nothing was touched
     if (effectiveModel !== prev.model) setContextTab('model');
-    else if (effectiveDataset !== prev.dataset) { setContextTab('dataset'); setPickedMethod(null); }
+    else if (effectiveDataset !== prev.dataset) { setContextTab('dataset'); setPickedMethod(null); setPickedModel(null); }
     else {
       const added = selectedMethods.filter((m) => !prev.methods.includes(m));
       if (added.length === 1) { setContextTab('method'); setPickedMethod(added[0]); }
@@ -1728,6 +1774,13 @@ function ModelForm({ outputStructure }) {
   // is a single choice and lives in the selection bar, so the tab would be a
   // second control for a question already answered.
   const showModelFacet = vs.mode === 'class_compare';
+
+  // Where the model is a column rather than a single choice, the card reads the
+  // one that was last named — a column header dot, a chip, the rail — and
+  // otherwise the first column on screen.
+  const contextModel = showModelFacet
+    ? (pickedModel && selectedModels.includes(pickedModel) ? pickedModel : selectedModels[0] ?? null)
+    : effectiveModel;
   const railTabs = showModelFacet ? (
     <RailTabs
       value={facet} onChange={setFacet}
@@ -1814,11 +1867,12 @@ function ModelForm({ outputStructure }) {
             the maps they act on. */}
         {contextShown && (
           <ContextCard
-            dataset={effectiveDataset} model={effectiveModel} method={contextMethod}
+            dataset={effectiveDataset} model={contextModel} method={contextMethod}
             methodOptions={selectedMethods} onMethod={setPickedMethod}
+            modelOptions={showModelFacet ? selectedModels : []}
+            onModel={showModelFacet ? setPickedModel : null}
             tab={contextTab} onTab={setContextTab}
             expanded={contextOpen} onExpand={setContextOpen}
-            hiddenKinds={vs.mode === 'class_compare' ? ['model'] : undefined}
           />
         )}
 

@@ -1,4 +1,4 @@
-"""Infidelity metric for attribution maps."""
+"""Fidelity metric normalized against a zero-attribution baseline."""
 
 from __future__ import annotations
 
@@ -7,12 +7,18 @@ import torch
 from backend.metrics.metrics import Metric
 
 
-class InfidelityScore(Metric):
-    """Mean squared attribution error under Gaussian input perturbations.
+class FidelityScore(Metric):
+    """Relative reduction in infidelity over a zero attribution.
 
-    For each sampled perturbation ``delta``, this compares the attribution's
-    predicted output change ``sum(delta * attribution)`` with the model's
-    observed target-logit change ``f(x) - f(x - delta)``. Lower is better.
+    For each sampled perturbation ``delta``, the attribution predicts an output
+    change ``sum(delta * attribution)`` and the model supplies the observed
+    target-logit change ``f(x) - f(x - delta)``. The score is
+
+    ``1 - E[(predicted - observed)^2] / E[observed^2]``.
+
+    One is perfect, zero matches the zero-attribution baseline, and negative
+    values are worse than that baseline. A zero baseline error makes the score
+    undefined and is represented as ``NaN``.
     """
 
     def __init__(
@@ -38,7 +44,7 @@ class InfidelityScore(Metric):
         self.validate_inputs(self.inputs, self.targets)
         if self.attributions.shape != self.inputs.shape:
             raise ValueError(
-                "Attributions must have the same shape as inputs for infidelity"
+                "Attributions must have the same shape as inputs for fidelity"
             )
         if self.attributions.device != self.inputs.device:
             raise ValueError("Inputs and attributions must be on the same device")
@@ -62,7 +68,8 @@ class InfidelityScore(Metric):
             raise ValueError("max_examples_per_batch must be positive")
 
         batch_size = self.inputs.shape[0]
-        squared_error_sum = self.inputs.new_zeros(batch_size)
+        attribution_error_sum = self.inputs.new_zeros(batch_size)
+        baseline_error_sum = self.inputs.new_zeros(batch_size)
         generator = torch.Generator(device=self.inputs.device).manual_seed(random_seed)
 
         with torch.no_grad():
@@ -91,16 +98,22 @@ class InfidelityScore(Metric):
                     perturbations * self.attributions.unsqueeze(0)
                 ).flatten(2).sum(dim=2)
                 observed_changes = original_scores.unsqueeze(0) - perturbed_scores
-                squared_error_sum += (
+                attribution_error_sum += (
                     predicted_changes - observed_changes
                 ).square().sum(dim=0)
+                baseline_error_sum += observed_changes.square().sum(dim=0)
                 sampled += count
 
-        self.result = squared_error_sum / n_perturb_samples
+        result = torch.full_like(attribution_error_sum, torch.nan)
+        defined = baseline_error_sum > 0
+        result[defined] = (
+            1 - attribution_error_sum[defined] / baseline_error_sum[defined]
+        )
+        self.result = result
 
     def compute(self) -> torch.Tensor:
         if self.result is None:
-            raise RuntimeError("Must run update() before computing infidelity")
+            raise RuntimeError("Must run update() before computing fidelity")
         return self.result
 
     def reset(self) -> None:

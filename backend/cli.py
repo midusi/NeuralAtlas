@@ -48,6 +48,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help=(
+            "First dataset sample to process (default: 0). Together with --num-samples "
+            "this selects the half-open window [start-index, num-samples), so a chunked "
+            "run can process only the samples it has not covered yet."
+        ),
+    )
+    parser.add_argument(
         "--export-batch-images",
         type=int,
         default=config.DEFAULT_EXPORT_BATCH_IMAGES,

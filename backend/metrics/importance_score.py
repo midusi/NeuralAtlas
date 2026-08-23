@@ -1,7 +1,6 @@
 import torch
-import torch.nn.functional as F
 from typing import List, Callable, Optional
-from .metrics import Metric
+from .metrics import Metric, masked_target_scores
 from torchvision.transforms import GaussianBlur
 import math
 
@@ -62,18 +61,6 @@ class ImportanceScore(Metric):
         total_pixels = H * W
         steps = n_steps + 1
         device = self.inputs.device
-
-        # Coordinate grid for mapping flat indices back to 2D
-        coord_grid = torch.stack(
-            torch.meshgrid(
-                torch.arange(H, device=device),
-                torch.arange(W, device=device),
-                indexing="ij",
-            ),
-            dim=0,
-        )  # (2, H, W)
-        coord_flat = coord_grid.view(2, -1).permute(1, 0)  # (H*W, 2)
-
         heatmaps_flat = self.heatmaps.view(batch_size, -1)  # (B, H*W)
 
         # Sort by importance values
@@ -91,40 +78,32 @@ class ImportanceScore(Metric):
         chunk_size = math.ceil(total_pixels / num_chunks)
 
         # Prepare randomized sorted indices, applying tie-breaking only within equal-value blocks
-        rand_sorted_indices = torch.zeros_like(sorted_indices)
+        rand_sorted_indices = sorted_indices.clone()
         for b in range(batch_size):
             vals = sorted_vals[b]
             idxs = sorted_indices[b]
 
             # Find boundaries of equal-value blocks
             diff = vals[1:] != vals[:-1]
-            change_pts = torch.nonzero(diff, as_tuple=False).squeeze() + 1
-            cp_list = (
-                change_pts.tolist()
-                if isinstance(change_pts.tolist(), list)
-                else [int(change_pts)]
-            )
-            boundaries = [0] + cp_list + [total_pixels]
+            change_pts = torch.nonzero(diff, as_tuple=False).flatten() + 1
+            boundaries = [0] + change_pts.tolist() + [total_pixels]
 
-            reordered = []
-            # Process each value block in original order
+            # Process each value block in original order. A block only yields more
+            # than one subchunk when it is longer than chunk_size, so shorter ones
+            # are left as the clone already has them instead of being rebuilt.
             for start, end in zip(boundaries[:-1], boundaries[1:]):
+                if end - start <= chunk_size:
+                    continue
                 block = idxs[start:end]
-                # Split block into subchunks of size chunk_size
+                # Split block into subchunks of size chunk_size and shuffle their order
                 subblocks = [
                     block[i : i + chunk_size]
                     for i in range(0, block.numel(), chunk_size)
                 ]
-                # If multiple subblocks (i.e., block is larger than chunk_size), shuffle their order
-                if len(subblocks) > 1:
-                    perm = torch.randperm(len(subblocks), device=device)
-                    subblocks = [subblocks[i] for i in perm]
-                # Append subblocks in (possibly shuffled) order
-                for sb in subblocks:
-                    reordered.append(sb)
-
-            # Concatenate all blocks
-            rand_sorted_indices[b] = torch.cat(reordered)
+                perm = torch.randperm(len(subblocks), device=device)
+                rand_sorted_indices[b, start:end] = torch.cat(
+                    [subblocks[i] for i in perm]
+                )
 
         # Prepare fractions progression
         if mode == "lif":
@@ -132,45 +111,36 @@ class ImportanceScore(Metric):
         else:
             fractions = torch.linspace(0.0, 1.0, steps, device=device)
 
-        curves = torch.zeros((batch_size, steps, 2), device=device)
+        # Every step's mask is a scatter of the top-k ranked pixels, so the whole
+        # curve is built up front and scored in batches rather than one forward
+        # pass per step.
+        masks = self.inputs.new_zeros((batch_size, steps, total_pixels))
+        for step, fraction in enumerate(fractions.tolist()):
+            k = int(fraction * total_pixels)
+            selected = (
+                rand_sorted_indices[:, total_pixels - k :]
+                if mode == "lif"
+                else rand_sorted_indices[:, :k]
+            )
+            masks[:, step].scatter_(1, selected, 1.0)
+        masks = masks.view(batch_size, steps, H, W)
 
-        # Main loop over fraction steps
-        for step in range(steps):
-            f = fractions[step].item()
-            k = int(f * total_pixels)
+        scores = masked_target_scores(
+            self.model,
+            self.inputs,
+            self.blurred_inputs,
+            self.targets,
+            masks,
+        )
 
-            mask = torch.zeros((batch_size, H, W), device=device, dtype=torch.float)
-            if k > 0:
-                # Select k pixels in lif/mif
-                if mode == "lif":
-                    selected_flat_idx = rand_sorted_indices[:, -k:]
-                else:
-                    selected_flat_idx = rand_sorted_indices[:, :k]
-                # Map to 2D and update mask
-                for b in range(batch_size):
-                    coords = coord_flat[selected_flat_idx[b]]
-                    mask[b, coords[:, 0].long(), coords[:, 1].long()] = 1.0
+        curves = self.inputs.new_empty((batch_size, steps, 2))
+        curves[:, :, 0] = fractions
+        curves[:, :, 1] = scores
 
-            # Apply mask to inputs
-            if self.blur_sigma is not None:
-                masked_inputs = (
-                    mask.unsqueeze(1) * self.inputs
-                    + (1 - mask.unsqueeze(1)) * self.blurred_inputs
-                )
-            else:
-                masked_inputs = mask.unsqueeze(1) * self.inputs
-
-            # Compute model outputs and scores
-            with torch.no_grad():
-                outputs = self.model(masked_inputs)
-            scores = outputs[torch.arange(batch_size), self.targets]
-
-            curves[:, step, 0] = f
-            curves[:, step, 1] = scores
-
-            if callbacks:
+        if callbacks:
+            for step in range(steps):
                 for callback in callbacks:
-                    callback(mask)
+                    callback(masks[:, step])
 
         self.output_curves = curves
 

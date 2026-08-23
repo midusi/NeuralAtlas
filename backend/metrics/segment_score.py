@@ -13,7 +13,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
-from backend.metrics.metrics import Metric
+from backend.metrics.metrics import Metric, masked_target_scores
 
 
 class SegmentConfig(ABC):
@@ -230,6 +230,7 @@ class SegmentScore(Metric):
         seg_config: SegmentConfig,
         *,
         segmentation_inputs: torch.Tensor,
+        segments: torch.Tensor | None = None,
         mode: str = "deletion",
         blur_sigma: Optional[float] = None,
         **kwargs: object,
@@ -246,8 +247,10 @@ class SegmentScore(Metric):
         self.__dict__.update(kwargs)
 
         self._validate_inputs()
-        with torch.no_grad():
-            self.segments = self.seg_config.segment(self.segmentation_inputs)
+        if segments is None:
+            with torch.no_grad():
+                segments = self.seg_config.segment(self.segmentation_inputs)
+        self.segments = segments
         expected_segment_shape = (
             self.inputs.shape[0],
             self.seg_config.k,
@@ -327,12 +330,6 @@ class SegmentScore(Metric):
         sums = (self.segments * self.heatmaps.unsqueeze(1)).sum(dim=(2, 3))
         self.order = torch.argsort(sums / areas, dim=1)
 
-    def _masked_inputs_from_mask(self, mask: torch.Tensor) -> torch.Tensor:
-        expanded_mask = mask.unsqueeze(1)
-        if self.blurred_inputs is not None:
-            return expanded_mask * self.inputs + (1 - expanded_mask) * self.blurred_inputs
-        return expanded_mask * self.inputs
-
     def update(
         self,
         callbacks: Optional[list[Callable[[torch.Tensor], object]]] = None,
@@ -340,32 +337,35 @@ class SegmentScore(Metric):
     ) -> None:
         batch_size, _, height, width = self.inputs.shape
         num_segments = self.segments.shape[1]
-        if self.mode == "insertion":
-            current_mask = self.inputs.new_zeros((batch_size, height, width))
-        else:
-            current_mask = self.inputs.new_ones((batch_size, height, width))
-
-        curves = self.inputs.new_zeros((batch_size, num_segments + 1, 2))
         batch_indices = torch.arange(batch_size, device=self.inputs.device)
+        segments = self.segments.to(self.inputs.dtype)
+        # Insertion starts from an empty mask and adds segments; deletion starts
+        # from a full one and takes them away.
+        start_value, sign = (0.0, 1.0) if self.mode == "insertion" else (1.0, -1.0)
 
-        for step in range(num_segments + 1):
-            if step:
-                segment_indices = self.order[:, step - 1]
-                step_mask = self.segments[batch_indices, segment_indices].to(
-                    self.inputs.dtype
-                )
-                if self.mode == "insertion":
-                    current_mask = (current_mask + step_mask).clamp(0, 1)
-                else:
-                    current_mask = (current_mask - step_mask).clamp(0, 1)
+        # The mask chain depends only on the segment order, never on the model
+        # output, so the whole sequence is built first and then scored in
+        # stacked batches instead of one forward pass per step.
+        masks = self.inputs.new_empty((batch_size, num_segments + 1, height, width))
+        masks[:, 0] = start_value
+        for step in range(1, num_segments + 1):
+            step_mask = segments[batch_indices, self.order[:, step - 1]]
+            masks[:, step] = (masks[:, step - 1] + sign * step_mask).clamp(0, 1)
 
-            with torch.no_grad():
-                outputs = self.model(self._masked_inputs_from_mask(current_mask))
-            curves[:, step, 0] = current_mask.mean(dim=(1, 2))
-            curves[:, step, 1] = outputs[batch_indices, self.targets]
+        curves = self.inputs.new_empty((batch_size, num_segments + 1, 2))
+        curves[:, :, 0] = masks.mean(dim=(2, 3))
+        curves[:, :, 1] = masked_target_scores(
+            self.model,
+            self.inputs,
+            self.blurred_inputs,
+            self.targets,
+            masks,
+        )
 
-            for callback in callbacks or []:
-                callback(current_mask)
+        if callbacks:
+            for step in range(num_segments + 1):
+                for callback in callbacks:
+                    callback(masks[:, step])
 
         self.output_curves = curves
 

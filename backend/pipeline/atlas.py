@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -9,7 +11,7 @@ import numpy as np
 import torch
 from captum._utils.typing import Module, TensorOrTupleOfTensorsGeneric
 from PIL import Image
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision import datasets
 from tqdm.auto import tqdm
 
@@ -24,18 +26,19 @@ def evaluate_faithfulness(
     attribution: torch.Tensor,
     target: torch.Tensor,
     metrics: set[str],
+    segments: torch.Tensor | None = None,
 ) -> dict[str, MetricValue]:
     """Faithfulness scores for one attribution map, keyed by metric name.
 
     The heatmap is reduced from the attribution the same way the renderer does
     (channel sum, absolute value) and min-max normalized to [0, 1] so the
     morphology threshold is meaningful across methods with different scales.
-    Infidelity instead receives the original, unreduced attribution tensor
-    because its magnitude is part of the metric.
+    Fidelity instead receives the original, unreduced attribution tensor
+    because its magnitude is part of the underlying infidelity calculation.
     """
     from backend.metrics import (
+        FidelityScore,
         ImportanceScore,
-        InfidelityScore,
         KmeansConfig,
         MorphScore,
         SegmentScore,
@@ -69,20 +72,22 @@ def evaluate_faithfulness(
             target,
             KmeansConfig(),
             segmentation_inputs=inputs,
+            segments=segments,
             mode="deletion",
             blur_sigma=blur_sigma,
         )
         metric.update()
         scores["segment"] = float(metric.compute()[0].item())
-    if "infidelity" in metrics:
-        metric = InfidelityScore(model, inputs, attribution, target)
+    if "fidelity" in metrics:
+        metric = FidelityScore(model, inputs, attribution, target)
         metric.update(
-            n_perturb_samples=config.INFIDELITY_N_PERTURB_SAMPLES,
-            noise_std=config.INFIDELITY_NOISE_STD,
-            max_examples_per_batch=config.INFIDELITY_MAX_EXAMPLES_PER_BATCH,
-            random_seed=config.INFIDELITY_RANDOM_SEED,
+            n_perturb_samples=config.FIDELITY_N_PERTURB_SAMPLES,
+            noise_std=config.FIDELITY_NOISE_STD,
+            max_examples_per_batch=config.FIDELITY_MAX_EXAMPLES_PER_BATCH,
+            random_seed=config.FIDELITY_RANDOM_SEED,
         )
-        scores["infidelity"] = float(metric.compute()[0].item())
+        fidelity = float(metric.compute()[0].item())
+        scores["fidelity"] = fidelity if math.isfinite(fidelity) else None
     return scores
 
 
@@ -167,7 +172,7 @@ class AttributionRenderer:
         elif image_ext in {"jpg", "jpeg"}:
             save_kwargs.update({"quality": 85, "optimize": True, "progressive": True})
         elif image_ext == "avif":
-            save_kwargs.update({"quality": 75, "speed": 1})
+            save_kwargs.update({"quality": 75, "speed": 6})
         img.save(output_dir / filename, **save_kwargs)
         return f"{config.OUTPUT_IMAGES_BASE_URL}/{filename}"
 
@@ -232,6 +237,26 @@ class AtlasRunner:
         filename = Path(sample_path).name
         return f"/{dataset_name}/val/{class_id}/{filename}"
 
+    def _replay_image_counters(self, start_index: int) -> defaultdict[str, int]:
+        """Per-class image counts for the samples before `start_index`.
+
+        `image_id` is a per-class sequence number, so a window that does not begin at
+        0 has to replay the skipped samples' class ids; otherwise the ids restart at
+        "0" and collide with the ones an earlier window already wrote.
+        """
+        counters: defaultdict[str, int] = defaultdict(int)
+        if not start_index:
+            return counters
+        samples = getattr(self.data, "samples", None)
+        if not isinstance(samples, list):
+            raise TypeError(
+                "start_index requires a dataset exposing .samples (e.g. ImageFolder) so "
+                "image ids stay aligned with a run that starts at 0."
+            )
+        for _, skipped_target in islice(samples, start_index):
+            counters[self.data.classes[skipped_target]] += 1
+        return counters
+
     def stream(
         self,
         num_samples: int,
@@ -240,28 +265,51 @@ class AtlasRunner:
         dataset_name: str,
         image_ext: str = "webp",
         metrics: set[str] | None = None,
+        start_index: int = 0,
         **kwargs: Any,
     ) -> Iterator[ImageRecord]:
 
+        if start_index < 0:
+            raise ValueError(f"start_index must be non-negative, got {start_index}")
+        window = range(start_index, min(num_samples, len(self.data)))
+        if not window:
+            return
+
         self.model.eval()
-        dataloader = DataLoader(self.data, batch_size=1, shuffle=False)
+        # Subset instead of skipping inside the loop: samples before the window are
+        # never decoded, so a late chunk costs the same as an early one.
+        dataloader = DataLoader(Subset(self.data, window), batch_size=1, shuffle=False)
         output_dir.mkdir(parents=True, exist_ok=True)
         image_ext = image_ext.lstrip(".").lower()
 
-        class_image_counters: defaultdict[str, int] = defaultdict(int)
+        class_image_counters = self._replay_image_counters(start_index)
 
-        with tqdm(total=num_samples, desc="Interpreting + Saving") as pbar:
-            for sample_index, (inputs, target) in enumerate(dataloader):
-                if sample_index >= num_samples:
-                    break
+        with tqdm(total=len(window), desc="Interpreting + Saving") as pbar:
+            for offset, (inputs, target) in enumerate(dataloader):
+                sample_index = start_index + offset
 
-                target = target.to(inputs.device)
-                class_id = str(target.item())
+                # ImageFolder sorts class directories as strings, so the target index
+                # only matches the directory name for small datasets ("0".."9"). Read
+                # the name back so class ids and attribution targets stay aligned with
+                # the real ImageNet class ids.
+                class_id = self.data.classes[target.item()]
+                attribution_target = torch.tensor(
+                    [int(class_id)],
+                    device=inputs.device,
+                    dtype=target.dtype,
+                )
                 image_id = str(class_image_counters[class_id])
                 original_url = self._resolve_original_url(dataset_name, class_id, sample_index)
 
                 with torch.no_grad():
                     prediction = self._serialize_prediction(self.model(inputs))
+
+                segments = None
+                if self.interp_methods and metrics and "segment" in metrics:
+                    from backend.metrics import KmeansConfig
+
+                    with torch.no_grad():
+                        segments = KmeansConfig().segment(inputs)
 
                 record = ImageRecord(
                     model=model_name,
@@ -278,7 +326,11 @@ class AtlasRunner:
                     for interp_method in method_pbar:
                         method_name = str(interp_method)
                         method_pbar.set_description(f"Attribution {method_name}")
-                        attribution = interp_method.attribute(self.model, inputs, target)
+                        attribution = interp_method.attribute(
+                            self.model,
+                            inputs,
+                            attribution_target,
+                        )
                         if not isinstance(attribution, torch.Tensor):
                             raise TypeError(
                                 "Streaming visualization requires tensor attribution output; "
@@ -300,7 +352,12 @@ class AtlasRunner:
                         if metrics:
                             record.interpretability_metrics[method_name] = (
                                 evaluate_faithfulness(
-                                    self.model, inputs, attribution, target, metrics
+                                    self.model,
+                                    inputs,
+                                    attribution,
+                                    attribution_target,
+                                    metrics,
+                                    segments,
                                 )
                             )
 

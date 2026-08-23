@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -173,19 +174,22 @@ class OutputRepository:
             if isinstance(item, dict)
         ]
 
-    def count_method_outputs(
+    def method_output_counts(
         self,
         model: str,
         dataset: str,
-        method: str,
         image_ext: str,
-    ) -> int:
+    ) -> dict[str, int]:
+        """Count every method in one pass through a run payload."""
         target_ext = f".{image_ext.lower()}"
-        return sum(
-            1
-            for record in self.load_images(model, dataset)
-            if (record.outputs.get(method) or "").lower().endswith(target_ext)
-        )
+        counts: Counter[str] = Counter()
+        for record in self.load_images(model, dataset):
+            counts.update(
+                method
+                for method, url in record.outputs.items()
+                if url.lower().endswith(target_ext)
+            )
+        return dict(counts)
 
     def upsert_image_records(
         self,

@@ -1678,8 +1678,6 @@ body {
   gap: var(--space-lg);
 }
 
-/* Method names live in each map caption, so the full width belongs to the
-   original and model columns. */
 .compare-header,
 .compare-row {
   display: grid;
@@ -1749,9 +1747,45 @@ body {
   scroll-margin-top: calc(var(--chrome-h) + var(--renderbar-h) + 48px + var(--space-sm));
 }
 
+/* The method name is a property of the row, not of every cell in it: printed
+   once here as a heading over the band of maps it names, instead of once per
+   model. Same weight and tracking as the model names in the header — the two
+   axes of the matrix read the same. It skips the original column so the
+   heading starts where the maps start. */
+.compare-row__method {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+  margin-top: var(--space-sm);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+
+.compare-row__method-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The rule that separates one band of maps from the next runs out of the name
+   at its own height, the way a legend sits in a fieldset border — a line above
+   the label would read as the bottom edge of the band before it. */
+.compare-row__method::after {
+  content: '';
+  flex: 1;
+  min-width: var(--space-md);
+  height: 1px;
+  background: var(--border);
+}
+
 .compare-row__empty {
   grid-column: 2 / -1;
-  margin-top: var(--space-md);
   font-size: var(--fs-body-sm);
   color: var(--text2);
 }
@@ -1765,7 +1799,7 @@ body {
   min-width: 0;
 }
 
-/* Column two, and it holds every method row: the thing being compared against
+/* Column one, and it holds every method row: the thing being compared against
    is one image, not one image per method. */
 .compare-cell--original {
   grid-column: 1;
@@ -2273,6 +2307,11 @@ body {
   .compare-header__gutter,
   .compare-row__gutter {
     display: none;
+  }
+
+  /* One column, so the heading spans it like everything else. */
+  .compare-row__method {
+    grid-column: auto;
   }
 
   .compare-row__empty {
