@@ -112,7 +112,14 @@ def ensure_dataset(dataset: str, dry_run: bool = False) -> int:
     # Run through `uv run`, not sys.executable: the download script declares its own
     # deps (kagglehub, Pillow) in a PEP-723 header and they are not project deps.
     subprocess.run(
-        ["uv", "run", str(REPO_ROOT / "scripts/download_nano_imagenet.py"), "--name", dataset],
+        [
+            "uv",
+            "run",
+            str(REPO_ROOT / "scripts/download_nano_imagenet.py"),
+            "--name",
+            dataset,
+            "--fill-from-train",
+        ],
         check=True,
         cwd=REPO_ROOT,
     )
