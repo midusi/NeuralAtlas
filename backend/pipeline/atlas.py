@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -25,6 +26,7 @@ def evaluate_faithfulness(
     attribution: torch.Tensor,
     target: torch.Tensor,
     metrics: set[str],
+    segments: torch.Tensor | None = None,
 ) -> dict[str, MetricValue]:
     """Faithfulness scores for one attribution map, keyed by metric name.
 
@@ -70,6 +72,7 @@ def evaluate_faithfulness(
             target,
             KmeansConfig(),
             segmentation_inputs=inputs,
+            segments=segments,
             mode="deletion",
             blur_sigma=blur_sigma,
         )
@@ -169,7 +172,7 @@ class AttributionRenderer:
         elif image_ext in {"jpg", "jpeg"}:
             save_kwargs.update({"quality": 85, "optimize": True, "progressive": True})
         elif image_ext == "avif":
-            save_kwargs.update({"quality": 75, "speed": 1})
+            save_kwargs.update({"quality": 75, "speed": 6})
         img.save(output_dir / filename, **save_kwargs)
         return f"{config.OUTPUT_IMAGES_BASE_URL}/{filename}"
 
@@ -250,7 +253,7 @@ class AtlasRunner:
                 "start_index requires a dataset exposing .samples (e.g. ImageFolder) so "
                 "image ids stay aligned with a run that starts at 0."
             )
-        for _, skipped_target in samples[:start_index]:
+        for _, skipped_target in islice(samples, start_index):
             counters[self.data.classes[skipped_target]] += 1
         return counters
 
@@ -275,7 +278,7 @@ class AtlasRunner:
         self.model.eval()
         # Subset instead of skipping inside the loop: samples before the window are
         # never decoded, so a late chunk costs the same as an early one.
-        dataloader = DataLoader(Subset(self.data, list(window)), batch_size=1, shuffle=False)
+        dataloader = DataLoader(Subset(self.data, window), batch_size=1, shuffle=False)
         output_dir.mkdir(parents=True, exist_ok=True)
         image_ext = image_ext.lstrip(".").lower()
 
@@ -300,6 +303,13 @@ class AtlasRunner:
 
                 with torch.no_grad():
                     prediction = self._serialize_prediction(self.model(inputs))
+
+                segments = None
+                if self.interp_methods and metrics and "segment" in metrics:
+                    from backend.metrics import KmeansConfig
+
+                    with torch.no_grad():
+                        segments = KmeansConfig().segment(inputs)
 
                 record = ImageRecord(
                     model=model_name,
@@ -347,6 +357,7 @@ class AtlasRunner:
                                     attribution,
                                     attribution_target,
                                     metrics,
+                                    segments,
                                 )
                             )
 

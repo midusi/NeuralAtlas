@@ -232,6 +232,7 @@ def build_interp_methods(
             Occlusion,
             sliding_window_shapes=(3, 15, 15),
             strides=(3, 8, 8),
+            perturbations_per_eval=16,
         ),
         AttributionConfig(GuidedGradCam, layer=last_conv_layer),
         AttributionConfig(

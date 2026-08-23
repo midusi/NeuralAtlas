@@ -133,10 +133,8 @@ def completed_samples(repository: OutputRepository, model: str, dataset: str, im
     Samples are always processed in dataset order, so the per-method output count is a
     prefix length; the slowest method decides how much of the run is truly complete.
     """
-    counts = [
-        repository.count_method_outputs(model, dataset, entry.id, image_ext)
-        for entry in method_catalog()
-    ]
+    output_counts = repository.method_output_counts(model, dataset, image_ext)
+    counts = [output_counts.get(entry.id, 0) for entry in method_catalog()]
     return min(counts) if counts else 0
 
 

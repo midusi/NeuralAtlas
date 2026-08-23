@@ -69,15 +69,15 @@ def run_generation(args: Namespace) -> None:
         to_rgb_heatmap,
     )
     if not args.recompute:
+        existing_counts = repository.method_output_counts(
+            args.model,
+            dataset_name,
+            args.image_ext,
+        )
         filtered_methods = []
         for method in interp_methods:
             method_name = str(method)
-            existing_count = repository.count_method_outputs(
-                args.model,
-                dataset_name,
-                method_name,
-                args.image_ext,
-            )
+            existing_count = existing_counts.get(method_name, 0)
             if existing_count >= args.num_samples:
                 print(
                     f"Skipping {method_name}: {existing_count} outputs already exist."

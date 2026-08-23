@@ -230,6 +230,7 @@ class SegmentScore(Metric):
         seg_config: SegmentConfig,
         *,
         segmentation_inputs: torch.Tensor,
+        segments: torch.Tensor | None = None,
         mode: str = "deletion",
         blur_sigma: Optional[float] = None,
         **kwargs: object,
@@ -246,8 +247,10 @@ class SegmentScore(Metric):
         self.__dict__.update(kwargs)
 
         self._validate_inputs()
-        with torch.no_grad():
-            self.segments = self.seg_config.segment(self.segmentation_inputs)
+        if segments is None:
+            with torch.no_grad():
+                segments = self.seg_config.segment(self.segmentation_inputs)
+        self.segments = segments
         expected_segment_shape = (
             self.inputs.shape[0],
             self.seg_config.k,
