@@ -158,8 +158,8 @@ def completed_samples(repository: OutputRepository, model: str, dataset: str, im
     Samples are always processed in dataset order, so the per-method output count is a
     prefix length; the slowest method decides how much of the run is truly complete.
     """
-    output_counts = repository.method_output_counts(model, dataset, image_ext)
-    counts = [output_counts.get(entry.id, 0) for entry in method_catalog()]
+    completion_counts = repository.method_completion_counts(model, dataset, image_ext)
+    counts = [completion_counts.get(entry.id, 0) for entry in method_catalog()]
     return min(counts) if counts else 0
 
 
@@ -231,6 +231,11 @@ def step_image_files(model: str, dataset: str, image_ext: str) -> list[Path]:
     )
 
 
+def run_metadata_files(model: str, dataset: str) -> list[Path]:
+    run_dir = REPO_ROOT / config.OUTPUT_ROOT / "runs" / model / dataset
+    return [run_dir / "images.json", run_dir / "summary.json"]
+
+
 def upload_step(api, repo_id: str, model: str, label: str, dataset: str, image_ext: str) -> int:
     """Upload this worker's images and run metadata, never shared global metadata."""
     from huggingface_hub import CommitOperationAdd
@@ -245,13 +250,13 @@ def upload_step(api, repo_id: str, model: str, label: str, dataset: str, image_e
             CommitOperationAdd(path_in_repo=remote_image_path(path.name), path_or_fileobj=path)
         )
 
-    run_path = Path("runs") / model / dataset
-    for filename in ("images.json", "summary.json"):
-        path_in_repo = run_path / filename
+    output_root = REPO_ROOT / config.OUTPUT_ROOT
+    for path in run_metadata_files(model, dataset):
+        path_in_repo = path.relative_to(output_root)
         operations.append(
             CommitOperationAdd(
                 path_in_repo=path_in_repo.as_posix(),
-                path_or_fileobj=REPO_ROOT / config.OUTPUT_ROOT / path_in_repo,
+                path_or_fileobj=path,
             )
         )
 
@@ -360,12 +365,21 @@ def main() -> None:
         # of truth and lets a fresh GPU box resume an existing run.
         if upload:
             pending = step_image_files(model, args.dataset, args.image_ext)
-            if pending:
+            metadata_complete = all(
+                path.is_file() for path in run_metadata_files(model, args.dataset)
+            )
+            if pending and metadata_complete:
                 log(f"Reconciling {len(pending)} leftover files for {model}")
                 upload_step(api, model_repo, model, f"{model} resume", args.dataset, args.image_ext)
                 if cleanup:
                     cleanup_step(model, args.dataset, args.image_ext)
             else:
+                if pending:
+                    removed = cleanup_step(model, args.dataset, args.image_ext)
+                    log(
+                        f"Discarded {removed} orphan files for {model}: "
+                        "local run metadata is incomplete"
+                    )
                 downloaded = sync_run_metadata(api, model_repo, model, args.dataset)
                 if downloaded:
                     log(f"Restored {downloaded} checkpoint files from HF for {model}")
