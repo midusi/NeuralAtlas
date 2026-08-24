@@ -30,6 +30,14 @@ class MethodCatalogEntry:
         }
 
 
+class InsufficientFeaturesError(ValueError):
+    def __init__(self, feature_count: int) -> None:
+        self.feature_count = feature_count
+        super().__init__(
+            f"Attribution requires at least two interpretable features, got {feature_count}."
+        )
+
+
 def to_rgb_heatmap(attr: object) -> torch.Tensor:
     from captum.attr import LayerAttribution
 
@@ -127,6 +135,9 @@ def _make_superpixel_runtime_kwargs(mask_fn: Callable[..., object], **seg_kwargs
 
         if cached_mask is None:
             raise RuntimeError("Superpixel mask cache was not initialized.")
+        feature_count = int(torch.unique(cached_mask).numel())
+        if feature_count < 2:
+            raise InsufficientFeaturesError(feature_count)
         return {"feature_mask": cached_mask}
 
     return _runtime_kwargs

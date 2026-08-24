@@ -199,8 +199,8 @@ dist-ssr
 worker/
 .dev.vars
 
-# kaggle notebooks
-kaggle/*
+# Notebook sources
+notebooks/*
 
 # Editor directories and files
 .vscode/*

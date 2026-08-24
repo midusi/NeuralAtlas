@@ -8,6 +8,25 @@ MetricValue: TypeAlias = str | int | float | bool | None
 InterpretabilityMetricsPayload: TypeAlias = dict[str, dict[str, MetricValue]]
 
 
+@dataclass(frozen=True, slots=True)
+class AttributionFailure:
+    code: str
+    feature_count: int
+
+    def to_dict(self) -> dict[str, str | int]:
+        return {"code": self.code, "feature_count": self.feature_count}
+
+    @classmethod
+    def from_dict(cls, data: object) -> "AttributionFailure | None":
+        if not isinstance(data, Mapping):
+            return None
+        code = data.get("code")
+        feature_count = data.get("feature_count")
+        if not isinstance(code, str) or not isinstance(feature_count, int):
+            return None
+        return cls(code=code, feature_count=feature_count)
+
+
 @dataclass(slots=True)
 class PredictionRecord:
     predicted_class_id: str
@@ -44,6 +63,7 @@ class ImageRecord:
     original_url: str | None
     prediction: PredictionRecord | None = None
     outputs: dict[str, str] = field(default_factory=dict)
+    attribution_failures: dict[str, AttributionFailure] = field(default_factory=dict)
     interpretability_metrics: InterpretabilityMetricsPayload = field(
         default_factory=dict
     )
@@ -55,6 +75,10 @@ class ImageRecord:
             "original_url": self.original_url,
             "prediction": self.prediction.to_dict() if self.prediction else None,
             "outputs": dict(sorted(self.outputs.items())),
+            "attribution_failures": {
+                method: failure.to_dict()
+                for method, failure in sorted(self.attribution_failures.items())
+            },
             "interpretability_metrics": self.interpretability_metrics,
         }
 
@@ -74,6 +98,14 @@ class ImageRecord:
         outputs: dict[str, str] = {}
         if isinstance(outputs_data, Mapping):
             outputs = {str(key): str(value) for key, value in outputs_data.items()}
+
+        failures_data = data.get("attribution_failures")
+        attribution_failures: dict[str, AttributionFailure] = {}
+        if isinstance(failures_data, Mapping):
+            for method, failure_data in failures_data.items():
+                failure = AttributionFailure.from_dict(failure_data)
+                if failure is not None:
+                    attribution_failures[str(method)] = failure
 
         metrics_data = data.get("interpretability_metrics")
         interpretability_metrics: InterpretabilityMetricsPayload = {}
@@ -99,5 +131,6 @@ class ImageRecord:
             ),
             prediction=prediction,
             outputs=outputs,
+            attribution_failures=attribution_failures,
             interpretability_metrics=interpretability_metrics,
         )

@@ -69,7 +69,7 @@ def run_generation(args: Namespace) -> None:
         to_rgb_heatmap,
     )
     if not args.recompute:
-        existing_counts = repository.method_output_counts(
+        existing_counts = repository.method_completion_counts(
             args.model,
             dataset_name,
             args.image_ext,

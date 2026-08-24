@@ -17,7 +17,8 @@ from tqdm.auto import tqdm
 
 from attr_config import AttributionConfig
 from backend import config
-from backend.records import ImageRecord, MetricValue, PredictionRecord
+from backend.methods import InsufficientFeaturesError
+from backend.records import AttributionFailure, ImageRecord, MetricValue, PredictionRecord
 
 
 def evaluate_faithfulness(
@@ -326,11 +327,21 @@ class AtlasRunner:
                     for interp_method in method_pbar:
                         method_name = str(interp_method)
                         method_pbar.set_description(f"Attribution {method_name}")
-                        attribution = interp_method.attribute(
-                            self.model,
-                            inputs,
-                            attribution_target,
-                        )
+                        try:
+                            attribution = interp_method.attribute(
+                                self.model,
+                                inputs,
+                                attribution_target,
+                            )
+                        except InsufficientFeaturesError as error:
+                            record.attribution_failures[method_name] = AttributionFailure(
+                                code="insufficient_features",
+                                feature_count=error.feature_count,
+                            )
+                            method_pbar.write(
+                                f"Skipping {method_name} for sample {sample_index}: {error}"
+                            )
+                            continue
                         if not isinstance(attribution, torch.Tensor):
                             raise TypeError(
                                 "Streaming visualization requires tensor attribution output; "

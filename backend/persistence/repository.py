@@ -174,21 +174,23 @@ class OutputRepository:
             if isinstance(item, dict)
         ]
 
-    def method_output_counts(
+    def method_completion_counts(
         self,
         model: str,
         dataset: str,
         image_ext: str,
     ) -> dict[str, int]:
-        """Count every method in one pass through a run payload."""
+        """Count persisted outputs and explicit attribution failures by method."""
         target_ext = f".{image_ext.lower()}"
         counts: Counter[str] = Counter()
         for record in self.load_images(model, dataset):
-            counts.update(
+            completed_methods = {
                 method
                 for method, url in record.outputs.items()
                 if url.lower().endswith(target_ext)
-            )
+            }
+            completed_methods.update(record.attribution_failures)
+            counts.update(completed_methods)
         return dict(counts)
 
     def upsert_image_records(
@@ -212,6 +214,12 @@ class OutputRepository:
             if record.prediction is not None:
                 current.prediction = record.prediction
             current.outputs.update(record.outputs)
+            for method_name in record.outputs:
+                current.attribution_failures.pop(method_name, None)
+            for method_name, failure in record.attribution_failures.items():
+                current.outputs.pop(method_name, None)
+                current.interpretability_metrics.pop(method_name, None)
+                current.attribution_failures[method_name] = failure
             for method_name, metric_values in record.interpretability_metrics.items():
                 current.interpretability_metrics.setdefault(method_name, {}).update(metric_values)
 
@@ -249,7 +257,13 @@ class OutputRepository:
                 record.outputs.pop(method_name, None)
                 record.interpretability_metrics.pop(method_name, None)
             removed += len(stale_methods) + len(orphan_metrics)
-            if record.outputs or record.prediction is not None or record.original_url or record.interpretability_metrics:
+            if (
+                record.outputs
+                or record.attribution_failures
+                or record.prediction is not None
+                or record.original_url
+                or record.interpretability_metrics
+            ):
                 remaining.append(record)
         if removed > 0:
             self._write_run_bundle(model, dataset, remaining)
@@ -367,6 +381,7 @@ class OutputRepository:
         for record in records:
             class_ids.add(record.class_id)
             methods.update(record.outputs)
+            methods.update(record.attribution_failures)
             predicted_class_id = (
                 record.prediction.predicted_class_id if record.prediction is not None else None
             )
