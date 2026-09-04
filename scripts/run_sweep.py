@@ -25,6 +25,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import shutil
@@ -40,7 +41,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from backend import config  # noqa: E402
 from backend.ai_dataset.core import load_env  # noqa: E402
-from backend.methods import method_catalog  # noqa: E402
 from backend.persistence import OutputRepository  # noqa: E402
 
 DEFAULT_MODELS = [
@@ -75,6 +75,39 @@ def with_retries(label: str, action: Callable[[], T], attempts: int = 4) -> T:
 
 def model_repo_id(base_repo: str, model: str) -> str:
     return f"{base_repo}-{model}"
+
+
+def classification_model_names() -> list[str]:
+    """Return torchvision models compatible with this ImageNet classification pipeline."""
+    from torchvision import models
+
+    names = []
+    for name in models.list_models():
+        weights = models.get_model_weights(name).DEFAULT
+        if weights is not None and len(weights.meta.get("categories", ())) == 1000:
+            names.append(name)
+    return names
+
+
+def validate_model_names(model_names: list[str]) -> None:
+    available = classification_model_names()
+    invalid = [name for name in dict.fromkeys(model_names) if name not in available]
+    if not invalid:
+        return
+
+    details = []
+    for name in invalid:
+        suggestions = difflib.get_close_matches(name, available, n=3)
+        hint = f" (did you mean: {', '.join(suggestions)})" if suggestions else ""
+        details.append(f"{name}{hint}")
+    raise SystemExit(
+        "Unsupported torchvision ImageNet classification model(s): " + "; ".join(details)
+    )
+
+
+def ensure_model_repos(api, repo_ids: list[str]) -> None:
+    for repo_id in repo_ids:
+        api.create_repo(repo_id=repo_id, repo_type="dataset", exist_ok=True)
 
 
 def parse_output_filename(filename: str) -> tuple[str, str, str, str, str]:
@@ -152,15 +185,23 @@ def ensure_dataset(dataset: str, dry_run: bool = False) -> int:
 # ------------------------------------------------------------------------ progress
 
 
-def completed_samples(repository: OutputRepository, model: str, dataset: str, image_ext: str) -> int:
-    """How far into the dataset every method has already been persisted.
+def completed_samples(
+    repository: OutputRepository,
+    model: str,
+    dataset: str,
+    image_ext: str,
+    metrics: list[str],
+) -> int:
+    """Return the length of the contiguous, fully persisted dataset prefix."""
+    from backend.pipeline.atlas import dataset_keys
 
-    Samples are always processed in dataset order, so the per-method output count is a
-    prefix length; the slowest method decides how much of the run is truly complete.
-    """
-    completion_counts = repository.method_completion_counts(model, dataset, image_ext)
-    counts = [completion_counts.get(entry.id, 0) for entry in method_catalog()]
-    return min(counts) if counts else 0
+    return repository.first_incomplete_sample(
+        model,
+        dataset,
+        dataset_keys(dataset_dir(dataset) / "val"),
+        image_ext,
+        set(metrics),
+    )
 
 
 def sync_run_metadata(api, repo_id: str, model: str, dataset: str) -> int:
@@ -212,6 +253,7 @@ def run_step(model: str, dataset: str, start: int, target: int, args: argparse.N
         "--num-samples", str(target),
         "--image-ext", args.image_ext,
         "--export-batch-images", str(args.export_batch_images),
+        "--prune-stale-images",
         "--metrics", *args.metrics,
     ]
     log(f"$ {' '.join(command[1:])}")
@@ -319,6 +361,7 @@ def main() -> None:
     if args.chunk <= 0 or (args.total is not None and args.total <= 0):
         raise SystemExit("--chunk and --total must be positive.")
     args.image_ext = args.image_ext.lstrip(".").lower()
+    validate_model_names(args.models)
 
     load_env(REPO_ROOT / ".env")
     token = os.getenv("HF_TOKEN")
@@ -330,16 +373,19 @@ def main() -> None:
     cleanup = upload and not args.keep_local
 
     api = None
-    if upload:
+    if upload and not args.dry_run:
         from huggingface_hub import HfApi
 
         if not token:
             raise SystemExit("HF_TOKEN is not set (put it in .env), or pass --no-upload.")
         api = HfApi(token=token)
-        # Fail fast on a bad token or a missing repo rather than after hours of compute.
-        for repo_id in model_repos.values():
-            api.repo_info(repo_id=repo_id, repo_type="dataset")
-        log(f"Validated {len(model_repos)} model repos as {api.whoami().get('name', '?')}")
+        owner = api.whoami().get("name", "?")
+        # Idempotently create missing per-model repos before any expensive compute.
+        # Model names have already been checked against torchvision above.
+        ensure_model_repos(api, list(model_repos.values()))
+        log(f"Ensured {len(model_repos)} model repos as {owner}")
+    elif upload:
+        log(f"Dry run: would ensure {len(model_repos)} model repos")
 
     available = ensure_dataset(args.dataset, dry_run=args.dry_run)
     total = min(args.total, available) if args.total else available
@@ -351,7 +397,7 @@ def main() -> None:
         f"{args.chunk} | metrics={args.metrics or ['none']} | upload={upload} cleanup={cleanup}"
     )
     for model in args.models:
-        done = completed_samples(repository, model, args.dataset, args.image_ext)
+        done = completed_samples(repository, model, args.dataset, args.image_ext, args.metrics)
         log(f"  {model}: {done}/{total} samples already complete")
     if args.dry_run:
         return
@@ -384,7 +430,7 @@ def main() -> None:
                 if downloaded:
                     log(f"Restored {downloaded} checkpoint files from HF for {model}")
 
-        done = completed_samples(repository, model, args.dataset, args.image_ext)
+        done = completed_samples(repository, model, args.dataset, args.image_ext, args.metrics)
         log(f"Starting {model} from remote-confirmed checkpoint {done}/{total}")
 
         for target in targets:
