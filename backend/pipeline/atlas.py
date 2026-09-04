@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass
-from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -90,6 +89,32 @@ def evaluate_faithfulness(
         fidelity = float(metric.compute()[0].item())
         scores["fidelity"] = fidelity if math.isfinite(fidelity) else None
     return scores
+
+
+def sample_keys(data: datasets.ImageFolder) -> list[tuple[str, str]]:
+    """(class_id, image_id) of every sample, in dataset order.
+
+    `image_id` is a per-class sequence number, so the ids of a window can only be
+    derived by walking the dataset from the start. ImageFolder sorts class
+    directories as strings, so the target index only matches the directory name for
+    small datasets ("0".."9"); read the name back instead.
+    """
+    counters: defaultdict[str, int] = defaultdict(int)
+    keys = []
+    for _, target in data.samples:
+        class_id = data.classes[target]
+        keys.append((class_id, str(counters[class_id])))
+        counters[class_id] += 1
+    return keys
+
+
+def dataset_keys(
+    dataset_dir: str | Path,
+    start_index: int = 0,
+    stop_index: int | None = None,
+) -> list[tuple[str, str]]:
+    """`sample_keys` for a dataset directory, sliced to a window."""
+    return sample_keys(datasets.ImageFolder(str(dataset_dir)))[start_index:stop_index]
 
 
 def build_output_filename(
@@ -238,26 +263,6 @@ class AtlasRunner:
         filename = Path(sample_path).name
         return f"/{dataset_name}/val/{class_id}/{filename}"
 
-    def _replay_image_counters(self, start_index: int) -> defaultdict[str, int]:
-        """Per-class image counts for the samples before `start_index`.
-
-        `image_id` is a per-class sequence number, so a window that does not begin at
-        0 has to replay the skipped samples' class ids; otherwise the ids restart at
-        "0" and collide with the ones an earlier window already wrote.
-        """
-        counters: defaultdict[str, int] = defaultdict(int)
-        if not start_index:
-            return counters
-        samples = getattr(self.data, "samples", None)
-        if not isinstance(samples, list):
-            raise TypeError(
-                "start_index requires a dataset exposing .samples (e.g. ImageFolder) so "
-                "image ids stay aligned with a run that starts at 0."
-            )
-        for _, skipped_target in islice(samples, start_index):
-            counters[self.data.classes[skipped_target]] += 1
-        return counters
-
     def stream(
         self,
         num_samples: int,
@@ -283,23 +288,18 @@ class AtlasRunner:
         output_dir.mkdir(parents=True, exist_ok=True)
         image_ext = image_ext.lstrip(".").lower()
 
-        class_image_counters = self._replay_image_counters(start_index)
+        keys = sample_keys(self.data)[start_index:]
 
         with tqdm(total=len(window), desc="Interpreting + Saving") as pbar:
             for offset, (inputs, target) in enumerate(dataloader):
                 sample_index = start_index + offset
 
-                # ImageFolder sorts class directories as strings, so the target index
-                # only matches the directory name for small datasets ("0".."9"). Read
-                # the name back so class ids and attribution targets stay aligned with
-                # the real ImageNet class ids.
-                class_id = self.data.classes[target.item()]
+                class_id, image_id = keys[offset]
                 attribution_target = torch.tensor(
                     [int(class_id)],
                     device=inputs.device,
                     dtype=target.dtype,
                 )
-                image_id = str(class_image_counters[class_id])
                 original_url = self._resolve_original_url(dataset_name, class_id, sample_index)
 
                 with torch.no_grad():
@@ -372,6 +372,5 @@ class AtlasRunner:
                                 )
                             )
 
-                class_image_counters[class_id] += 1
                 pbar.update(1)
                 yield record

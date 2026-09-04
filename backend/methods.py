@@ -236,7 +236,7 @@ def build_interp_methods(
             n_masks=2048,
             grid_size=7,
             probability=0.5,
-            mask_batch_size=128,
+            mask_batch_size=64,
             seed=0,
         ),
         AttributionConfig(

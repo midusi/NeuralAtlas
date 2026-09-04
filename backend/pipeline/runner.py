@@ -8,7 +8,7 @@ from backend import config
 from backend.methods import build_interp_methods, method_catalog, to_rgb_heatmap
 from backend.models import build_model_runtime
 from backend.persistence import ModelCatalogEntry, OutputRepository
-from backend.pipeline.atlas import AtlasRunner
+from backend.pipeline.atlas import AtlasRunner, dataset_keys
 
 
 def run_generation(args: Namespace) -> None:
@@ -69,28 +69,19 @@ def run_generation(args: Namespace) -> None:
         to_rgb_heatmap,
     )
     if not args.recompute:
-        existing_counts = repository.method_completion_counts(
+        complete = repository.methods_complete_for_all(
             args.model,
             dataset_name,
+            dataset_keys(dataset_dir, start_index, args.num_samples),
             args.image_ext,
+            set(args.metrics),
         )
-        filtered_methods = []
-        for method in interp_methods:
-            method_name = str(method)
-            existing_count = existing_counts.get(method_name, 0)
-            if existing_count >= args.num_samples:
-                print(
-                    f"Skipping {method_name}: {existing_count} outputs already exist."
-                )
-            else:
-                if existing_count < start_index:
-                    print(
-                        f"Warning: {method_name} has {existing_count} outputs but the "
-                        f"window starts at {start_index}; samples "
-                        f"{existing_count}-{start_index - 1} will stay missing."
-                    )
-                filtered_methods.append(method)
-        interp_methods = filtered_methods
+        skipped = sorted(str(method) for method in interp_methods if str(method) in complete)
+        interp_methods = [
+            method for method in interp_methods if str(method) not in complete
+        ]
+        if skipped:
+            print(f"Skipping {len(skipped)} methods complete for this window: {', '.join(skipped)}")
 
     if not interp_methods:
         print("No new methods to run; exporting model predictions only.")

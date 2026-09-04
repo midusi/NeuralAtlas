@@ -68,6 +68,17 @@ class ImageRecord:
         default_factory=dict
     )
 
+    def completed_methods(self, image_ext: str, metrics: set[str]) -> set[str]:
+        """Methods that need no rerun: a registered failure, or an output of the right
+        format whose faithfulness metrics were all persisted."""
+        target_ext = f".{image_ext.lower()}"
+        completed = set(self.attribution_failures)
+        for method, url in self.outputs.items():
+            persisted = self.interpretability_metrics.get(method, {})
+            if url.lower().endswith(target_ext) and persisted.keys() >= metrics:
+                completed.add(method)
+        return completed
+
     def to_dict(self) -> dict[str, object]:
         return {
             "class_id": self.class_id,
