@@ -7,6 +7,7 @@ import { FACT_KEYS, lookupWiki } from './wiki';
 
 const EMPTY_OBJ = {};
 const BASE_URL = import.meta.env.BASE_URL ?? '/';
+const USE_LOCAL_ASSETS = import.meta.env.VITE_ASSET_SOURCE === 'local';
 
 // Overlay display preference (heatmap composited over the original), shared by all views.
 const OverlayContext = createContext({ enabled: false, opacity: 0.8 });
@@ -165,8 +166,9 @@ const HF_DATASET = 'https://huggingface.co/datasets/Matgc04';
 // imagenet-pico images live in a private HF dataset. Its small JSON metadata stays
 // public and local, so only files below val/ go through the authenticated Worker.
 const WORKER_ORIGIN = import.meta.env.VITE_WORKER_URL;
-const HF_ROUTES = import.meta.env.VITE_ASSET_SOURCE === 'local' ? [] : [
+const HF_ROUTES = USE_LOCAL_ASSETS ? [] : [
   { test: /^imagenet-pico-ai\/val\//, base: `${HF_DATASET}/neuralatlas-imagenet-pico-ai/resolve/main/`, strip: /^imagenet-pico-ai\// },
+  // Compatibility for runs created before manifest schema v2 added base_url.
   { test: /^outputs\/images\//, base: `${HF_DATASET}/neuralatlas-attributions/resolve/main/`, strip: /^outputs\// },
   ...(WORKER_ORIGIN ? [{ test: /^imagenet-pico\/val\//, base: `${WORKER_ORIGIN}/hf/`, strip: /^imagenet-pico\// }] : []),
 ];
@@ -207,7 +209,15 @@ async function fetchJson(path, { retryCount = 0, retryDelayMs = 400, signal, ...
   }
 }
 
-function buildLegacyOutputStructure(manifest, runPayloads) {
+function resolveRunOutputUrl(baseUrl, classId, outputPath) {
+  if (!outputPath || !baseUrl || USE_LOCAL_ASSETS) return outputPath;
+  const value = String(outputPath);
+  if (/^(?:[a-z]+:)?\/\//i.test(value) || value.startsWith('data:')) return value;
+  const filename = value.split('/').pop();
+  return `${String(baseUrl).replace(/\/+$/, '')}/${encodeURIComponent(classId)}/${encodeURIComponent(filename)}`;
+}
+
+function buildOutputStructure(manifest, runPayloads) {
   const structure = { models: {} };
 
   for (const model of manifest?.models ?? []) {
@@ -228,7 +238,12 @@ function buildLegacyOutputStructure(manifest, runPayloads) {
         const imageId = String(image.image_id);
         const classNode = datasetNode.classes[classId] ??= { images: {} };
         classNode.images[imageId] = {
-          outputs: image.outputs ?? {},
+          outputs: Object.fromEntries(
+            Object.entries(image.outputs ?? {}).map(([method, outputPath]) => [
+              method,
+              resolveRunOutputUrl(run.baseUrl, classId, outputPath),
+            ])
+          ),
           prediction: image.prediction ?? null,
           interpretability_metrics: image.interpretability_metrics ?? {},
           original_url: image.original_url ?? null,
@@ -248,23 +263,26 @@ function buildLegacyOutputStructure(manifest, runPayloads) {
   return structure;
 }
 
-function buildImageRecords(outputStructure, imgCache, lblCache) {
+function filenameFromUrl(url) {
+  if (!url) return null;
+  return decodeURIComponent(String(url).split(/[?#]/)[0].split('/').pop());
+}
+
+function buildImageRecords(outputStructure, lblCache) {
   const records = [];
   for (const [model, { datasets = {} }] of Object.entries(outputStructure?.models ?? {})) {
     for (const [dataset, { classes = {} }] of Object.entries(datasets)) {
-      const imgLookup = imgCache?.[dataset] ?? {};
       const lblLookup = lblCache?.[dataset] ?? {};
       for (const [classId, { images = {} }] of Object.entries(classes)) {
-        const filenames = imgLookup[classId] ?? [];
         const classLabel = lblLookup[classId] ?? classId;
         for (const [imageId, {
           outputs = {}, prediction = null, original_url: originalUrl = null,
           interpretability_metrics: interpretabilityMetrics = {},
         } = {}] of Object.entries(images)) {
-          const filename = filenames[imageId] ?? null;
+          const filename = filenameFromUrl(originalUrl);
           records.push({
             model, dataset, classId, classLabel, imageId, filename,
-            originalUrl: originalUrl ?? (filename ? `${dataset}/val/${classId}/${filename}` : null),
+            originalUrl,
             outputs,
             prediction,
             interpretabilityMetrics,
@@ -1214,7 +1232,7 @@ function CrumbSelect({ label, value, items, onSelect, placeholder, disabled }) {
           <div className="crumb__list" role="listbox">
             {filtered.length === 0 ? (
               <div className="combo__empty">No matches — try a shorter query.</div>
-            ) : filtered.slice(0, 250).map((item) =>
+            ) : filtered.slice(0, 1000).map((item) =>
               item.isHeader ? (
                 <div key={item.value} className="combo__group-header">{item.label}</div>
               ) : (
@@ -1476,7 +1494,6 @@ function ModelForm({ outputStructure }) {
   const [facet, setFacet] = useState('method');
   const [overlay, setOverlay] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(0.8);
-  const [imgCache, setImgCache] = useState({});
   const [lblCache, setLblCache] = useState({});
   const [dsStatus, setDsStatus] = useState({});
 
@@ -1526,9 +1543,14 @@ function ModelForm({ outputStructure }) {
   const effectiveModel = resolveSelection(modelOptions, vs.model);
 
   const datasetOptions = useMemo(() => {
+    if (vs.mode === 'class_compare') {
+      return [...new Set(
+        Object.values(modelsStruct).flatMap((model) => Object.keys(model?.datasets ?? {}))
+      )].sort(compareMixedIds);
+    }
     if (!effectiveModel) return [];
     return Object.keys(modelsStruct[effectiveModel]?.datasets ?? {}).sort(compareMixedIds);
-  }, [effectiveModel, modelsStruct]);
+  }, [vs.mode, effectiveModel, modelsStruct]);
 
   const effectiveDataset = resolveSelection(datasetOptions, vs.dataset);
 
@@ -1540,14 +1562,6 @@ function ModelForm({ outputStructure }) {
     const ds = effectiveDataset;
     const updStatus = (fields) =>
       !signal.aborted && setDsStatus((p) => ({ ...p, [ds]: { ...p[ds], ...fields } }));
-
-    if (!imgCache[ds]) {
-      updStatus({ imagesLoading: true, imagesError: null });
-      fetchJson(`${ds}/${ds}_structure.json`, { signal, retryCount: 2 })
-        .then((data) => { if (!signal.aborted) setImgCache((p) => ({ ...p, [ds]: data })); })
-        .catch((e) => { if (e.name !== 'AbortError') updStatus({ imagesError: 'Failed to load.' }); })
-        .finally(() => updStatus({ imagesLoading: false }));
-    }
 
     if (!lblCache[ds]) {
       updStatus({ labelsLoading: true, labelsError: null });
@@ -1562,11 +1576,11 @@ function ModelForm({ outputStructure }) {
     }
 
     return () => controller.abort();
-  }, [effectiveDataset, imgCache, lblCache]);
+  }, [effectiveDataset, lblCache]);
 
   const imageRecords = useMemo(
-    () => buildImageRecords(outputStructure, imgCache, lblCache),
-    [outputStructure, imgCache, lblCache]
+    () => buildImageRecords(outputStructure, lblCache),
+    [outputStructure, lblCache]
   );
 
   const modelMetrics = useMemo(
@@ -1575,29 +1589,44 @@ function ModelForm({ outputStructure }) {
   );
 
   const classOptions = useMemo(() => {
-    if (!effectiveDataset || !effectiveModel) return [];
+    if (!effectiveDataset) return [];
     const labels = lblCache[effectiveDataset] ?? {};
-    const classIds = Object.keys(modelsStruct[effectiveModel]?.datasets?.[effectiveDataset]?.classes ?? {});
-    return classIds.sort(compareMixedIds).map((id) => ({ value: id, label: `${id} - ${labels[id] ?? id}` }));
-  }, [effectiveDataset, effectiveModel, lblCache, modelsStruct]);
+    const classes = vs.mode === 'class_compare'
+      ? Object.values(modelsStruct).flatMap((model) =>
+          Object.keys(model?.datasets?.[effectiveDataset]?.classes ?? {})
+        )
+      : Object.keys(modelsStruct[effectiveModel]?.datasets?.[effectiveDataset]?.classes ?? {});
+    return [...new Set(classes)].sort(compareMixedIds)
+      .map((id) => ({ value: id, label: `${id} - ${labels[id] ?? id}` }));
+  }, [vs.mode, effectiveDataset, effectiveModel, lblCache, modelsStruct]);
 
   const effectiveClassId = resolveSelection(classOptions, vs.classId);
 
   const imageOptions = useMemo(() => {
     if (!effectiveModel || !effectiveDataset || !effectiveClassId) return [];
     const images = modelsStruct[effectiveModel]?.datasets?.[effectiveDataset]?.classes?.[effectiveClassId]?.images ?? {};
-    const filenames = imgCache[effectiveDataset]?.[effectiveClassId] ?? [];
     return Object.keys(images).sort(compareMixedIds).map((id) => ({
-      value: id, label: filenames[id] ? `${id} - ${filenames[id]}` : id,
+      value: id,
+      label: images[id]?.original_url ? `${id} - ${filenameFromUrl(images[id].original_url)}` : id,
     }));
-  }, [effectiveModel, effectiveDataset, effectiveClassId, modelsStruct, imgCache]);
+  }, [effectiveModel, effectiveDataset, effectiveClassId, modelsStruct]);
 
   const effectiveImageId = vs.mode === 'single' ? resolveSelection(imageOptions, vs.imageId) : null;
 
   const methodGroups = useMemo(() => {
     if (!effectiveDataset) return [];
     const methods = new Set();
-    for (const r of imageRecords) if (r.dataset === effectiveDataset) Object.keys(r.outputs).forEach((m) => methods.add(m));
+    const comparedModels = vs.mode === 'class_compare' && vs.models
+      ? new Set(vs.models.split(',').filter(Boolean))
+      : null;
+    for (const r of imageRecords) {
+      if (r.dataset !== effectiveDataset) continue;
+      if (vs.mode !== 'class_compare' && r.model !== effectiveModel) continue;
+      if (comparedModels && !comparedModels.has(r.model)) continue;
+      if (effectiveClassId && r.classId !== effectiveClassId) continue;
+      if (vs.mode === 'single' && effectiveImageId && r.imageId !== effectiveImageId) continue;
+      Object.keys(r.outputs).forEach((method) => methods.add(method));
+    }
     const grouped = {};
     for (const m of methods) { const c = categorizeMethod(m); (grouped[c] ??= []).push(m); }
     return [...Object.keys(METHOD_CATEGORIES), 'other']
@@ -1607,7 +1636,7 @@ function ModelForm({ outputStructure }) {
         label: METHOD_CATEGORIES[c]?.label ?? 'Other',
         methods: grouped[c].sort((a, b) => compareMethods(c, a, b)),
       }));
-  }, [imageRecords, effectiveDataset]);
+  }, [imageRecords, vs.mode, vs.models, effectiveModel, effectiveDataset, effectiveClassId, effectiveImageId]);
 
   const availableMethods = useMemo(() => methodGroups.flatMap((g) => g.methods), [methodGroups]);
 
@@ -1650,7 +1679,8 @@ function ModelForm({ outputStructure }) {
   const [pickedModel, setPickedModel] = useState(null);
   // A method named from the sidebar may not be checked, so it is enough that
   // it be documented — otherwise fall back to the first one on screen.
-  const contextMethod = pickedMethod && lookupWiki('method', pickedMethod)
+  const contextMethod = pickedMethod && selectedMethods.includes(pickedMethod)
+    && lookupWiki('method', pickedMethod)
     ? pickedMethod
     : selectedMethods[0] ?? null;
 
@@ -1734,7 +1764,7 @@ function ModelForm({ outputStructure }) {
     (vs.mode === 'class_compare' && classCompareMatrix.rows.length > 0);
 
   const dsInfo = effectiveDataset ? dsStatus[effectiveDataset] ?? {} : {};
-  const isLoading = dsInfo.imagesLoading || dsInfo.labelsLoading;
+  const isLoading = dsInfo.labelsLoading;
 
   const handleModeChange = (mode) => {
     const next = { ...vs, mode };
@@ -1857,7 +1887,7 @@ function ModelForm({ outputStructure }) {
       </aside>
 
       <main className="viewer-content">
-        {(dsInfo.imagesError || dsInfo.labelsError) && (
+        {dsInfo.labelsError && (
           <div className="selection-status">
             <p className="status-message" role="status">Some dataset metadata failed to load.</p>
           </div>
@@ -1916,12 +1946,12 @@ async function loadOutputStructure(signal) {
           fetchJson(paths.images, { signal }),
           fetchJson(paths.summary, { signal }),
         ]);
-        return [`${model}::${dataset}`, { images, summary }];
+        return [`${model}::${dataset}`, { images, summary, baseUrl: paths.base_url }];
       })
     )
   );
 
-  return buildLegacyOutputStructure(manifest, runPayloads);
+  return buildOutputStructure(manifest, runPayloads);
 }
 
 function App() {
