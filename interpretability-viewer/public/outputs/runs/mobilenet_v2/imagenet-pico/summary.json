@@ -14,15 +14,15 @@
   "imageCount": 3000,
   "methodCount": 17,
   "metrics": {
-    "accuracy": 0.7046666666666667,
+    "accuracy": 0.7146666666666667,
     "classCount": 1000,
-    "correct": 2114,
-    "incorrect": 886,
-    "macroF1": 0.6918660894660863,
-    "macroPrecision": 0.7306178571428571,
-    "macroRecall": 0.7046666666666663,
+    "correct": 2144,
+    "incorrect": 856,
+    "macroF1": 0.6995380952380922,
+    "macroPrecision": 0.7317690476190473,
+    "macroRecall": 0.7146666666666659,
     "missingPredictions": 0,
     "total": 3000
   },
-  "model": "resnet18"
+  "model": "mobilenet_v2"
 }

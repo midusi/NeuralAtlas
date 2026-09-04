@@ -14,15 +14,15 @@
   "imageCount": 3000,
   "methodCount": 17,
   "metrics": {
-    "accuracy": 0.7046666666666667,
+    "accuracy": 0.8043333333333333,
     "classCount": 1000,
-    "correct": 2114,
-    "incorrect": 886,
-    "macroF1": 0.6918660894660863,
-    "macroPrecision": 0.7306178571428571,
-    "macroRecall": 0.7046666666666663,
+    "correct": 2413,
+    "incorrect": 587,
+    "macroF1": 0.7970976190476152,
+    "macroPrecision": 0.8290095238095232,
+    "macroRecall": 0.8043333333333316,
     "missingPredictions": 0,
     "total": 3000
   },
-  "model": "resnet18"
+  "model": "convnext_tiny"
 }

@@ -18,19 +18,39 @@
       "imagenet-pico",
       "imagenet-pico-ai"
     ],
+    "convnext_tiny": [
+      "imagenet-pico"
+    ],
     "efficientnet_b0": [
       "imagenet-pico",
       "imagenet-pico-ai"
+    ],
+    "efficientnet_b4": [
+      "imagenet-pico"
+    ],
+    "inception_v3": [
+      "imagenet-pico"
+    ],
+    "mobilenet_v2": [
+      "imagenet-pico"
+    ],
+    "resnet101": [
+      "imagenet-pico"
     ],
     "resnet18": [
       "imagenet-pico",
       "imagenet-pico-ai"
     ]
   },
-  "generated_at": "2026-06-13T20:56:37.067307+00:00",
+  "generated_at": "2026-08-29T20:55:55.173585+00:00",
   "models": [
     "alexnet",
+    "convnext_tiny",
     "efficientnet_b0",
+    "efficientnet_b4",
+    "inception_v3",
+    "mobilenet_v2",
+    "resnet101",
     "resnet18"
   ],
   "runs": {
@@ -44,6 +64,12 @@
         "summary": "outputs/runs/alexnet/imagenet-pico-ai/summary.json"
       }
     },
+    "convnext_tiny": {
+      "imagenet-pico": {
+        "images": "outputs/runs/convnext_tiny/imagenet-pico/images.json",
+        "summary": "outputs/runs/convnext_tiny/imagenet-pico/summary.json"
+      }
+    },
     "efficientnet_b0": {
       "imagenet-pico": {
         "images": "outputs/runs/efficientnet_b0/imagenet-pico/images.json",
@@ -52,6 +78,30 @@
       "imagenet-pico-ai": {
         "images": "outputs/runs/efficientnet_b0/imagenet-pico-ai/images.json",
         "summary": "outputs/runs/efficientnet_b0/imagenet-pico-ai/summary.json"
+      }
+    },
+    "efficientnet_b4": {
+      "imagenet-pico": {
+        "images": "outputs/runs/efficientnet_b4/imagenet-pico/images.json",
+        "summary": "outputs/runs/efficientnet_b4/imagenet-pico/summary.json"
+      }
+    },
+    "inception_v3": {
+      "imagenet-pico": {
+        "images": "outputs/runs/inception_v3/imagenet-pico/images.json",
+        "summary": "outputs/runs/inception_v3/imagenet-pico/summary.json"
+      }
+    },
+    "mobilenet_v2": {
+      "imagenet-pico": {
+        "images": "outputs/runs/mobilenet_v2/imagenet-pico/images.json",
+        "summary": "outputs/runs/mobilenet_v2/imagenet-pico/summary.json"
+      }
+    },
+    "resnet101": {
+      "imagenet-pico": {
+        "images": "outputs/runs/resnet101/imagenet-pico/images.json",
+        "summary": "outputs/runs/resnet101/imagenet-pico/summary.json"
       }
     },
     "resnet18": {
@@ -65,5 +115,5 @@
       }
     }
   },
-  "schema_version": 1
+  "schema_version": 2
 }
