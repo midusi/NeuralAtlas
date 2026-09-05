@@ -5,7 +5,7 @@ from argparse import Namespace
 import torch
 
 from backend import config
-from backend.methods import build_interp_methods, method_catalog, to_rgb_heatmap
+from backend.methods import build_interp_methods, method_catalog
 from backend.models import build_model_runtime
 from backend.persistence import ModelCatalogEntry, OutputRepository
 from backend.pipeline.atlas import AtlasRunner, dataset_keys
@@ -66,7 +66,6 @@ def run_generation(args: Namespace) -> None:
     interp_methods = build_interp_methods(
         runtime.last_conv_layer,
         runtime.device,
-        to_rgb_heatmap,
     )
     if not args.recompute:
         complete = repository.methods_complete_for_all(

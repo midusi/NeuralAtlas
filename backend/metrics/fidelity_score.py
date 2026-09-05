@@ -2,9 +2,99 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 
 from backend.metrics.metrics import Metric
+
+
+@dataclass(frozen=True, slots=True)
+class GaussianNoise:
+    """The noisy baseline of Yeh et al. (2019), for local explanations.
+
+    Every pixel gets i.i.d. noise, which probes the sensitivity of the function
+    around ``x`` -- what a local explanation reports.
+    """
+
+    std: float
+
+    def __post_init__(self) -> None:
+        if self.std <= 0:
+            raise ValueError("std must be positive")
+
+    def sample(
+        self,
+        inputs: torch.Tensor,
+        count: int,
+        generator: torch.Generator,
+    ) -> torch.Tensor:
+        return torch.randn(
+            (count,) + tuple(inputs.shape),
+            device=inputs.device,
+            dtype=inputs.dtype,
+            generator=generator,
+        ) * self.std
+
+
+@dataclass(frozen=True, slots=True)
+class SquareRemoval:
+    """Square removal of Yeh et al. (2019), for global explanations.
+
+    A uniformly placed square is replaced by ``baseline``, so ``delta`` is zero
+    outside the patch and ``delta^T a`` only sums the attributions inside it.
+    That asks the question a global explanation claims to answer -- how much
+    does the logit drop if this region is removed -- and moves the output enough
+    to carry signal, unlike small i.i.d. noise.
+    """
+
+    size: int
+    baseline: float
+
+    def __post_init__(self) -> None:
+        if self.size < 1:
+            raise ValueError("size must be positive")
+
+    def sample(
+        self,
+        inputs: torch.Tensor,
+        count: int,
+        generator: torch.Generator,
+    ) -> torch.Tensor:
+        batch, _, height, width = inputs.shape
+        if self.size > min(height, width):
+            raise ValueError("size must not exceed the smaller input side")
+
+        removed = inputs - torch.as_tensor(
+            self.baseline,
+            device=inputs.device,
+            dtype=inputs.dtype,
+        )
+        rows = torch.arange(height, device=inputs.device)
+        columns = torch.arange(width, device=inputs.device)
+        tops = torch.randint(
+            height - self.size + 1,
+            (count, batch),
+            device=inputs.device,
+            generator=generator,
+        )
+        lefts = torch.randint(
+            width - self.size + 1,
+            (count, batch),
+            device=inputs.device,
+            generator=generator,
+        )
+        in_rows = (rows >= tops.unsqueeze(-1)) & (
+            rows < (tops + self.size).unsqueeze(-1)
+        )
+        in_columns = (columns >= lefts.unsqueeze(-1)) & (
+            columns < (lefts + self.size).unsqueeze(-1)
+        )
+        patch = (in_rows.unsqueeze(-1) & in_columns.unsqueeze(-2)).unsqueeze(2)
+        return patch.to(inputs.dtype) * removed.unsqueeze(0)
+
+
+Perturbation = GaussianNoise | SquareRemoval
 
 
 class FidelityScore(Metric):
@@ -19,6 +109,11 @@ class FidelityScore(Metric):
     One is perfect, zero matches the zero-attribution baseline, and negative
     values are worse than that baseline. A zero baseline error makes the score
     undefined and is represented as ``NaN``.
+
+    Yeh et al. (2019) sample ``delta`` differently for each explanation family
+    (section 2.5), so the caller passes the perturbation: `GaussianNoise` for
+    local explanations, `SquareRemoval` for global ones. Scores from the two
+    measure different things and must not be ranked against each other.
     """
 
     def __init__(
@@ -48,6 +143,8 @@ class FidelityScore(Metric):
             )
         if self.attributions.device != self.inputs.device:
             raise ValueError("Inputs and attributions must be on the same device")
+        if self.inputs.dim() != 4:
+            raise ValueError("Fidelity expects BCHW inputs")
 
     @staticmethod
     def _target_scores(outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -55,15 +152,13 @@ class FidelityScore(Metric):
 
     def update(
         self,
+        perturbation: Perturbation,
         n_perturb_samples: int = 25,
-        noise_std: float = 0.2,
         max_examples_per_batch: int = 5,
         random_seed: int = 0,
     ) -> None:
         if n_perturb_samples < 1:
             raise ValueError("n_perturb_samples must be positive")
-        if noise_std <= 0:
-            raise ValueError("noise_std must be positive")
         if max_examples_per_batch < 1:
             raise ValueError("max_examples_per_batch must be positive")
 
@@ -80,12 +175,7 @@ class FidelityScore(Metric):
             sampled = 0
             while sampled < n_perturb_samples:
                 count = min(max_examples_per_batch, n_perturb_samples - sampled)
-                perturbations = torch.randn(
-                    (count,) + tuple(self.inputs.shape),
-                    device=self.inputs.device,
-                    dtype=self.inputs.dtype,
-                    generator=generator,
-                ) * noise_std
+                perturbations = perturbation.sample(self.inputs, count, generator)
                 perturbed_inputs = self.inputs.unsqueeze(0) - perturbations
 
                 flat_inputs = perturbed_inputs.flatten(0, 1)

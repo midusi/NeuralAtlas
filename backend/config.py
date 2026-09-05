@@ -17,7 +17,14 @@ FAITHFULNESS_BLUR_SIGMA = None
 # Gaussian blur sigma of the PeS/PdS source paper (tau=0.5, phi=1%, 100 steps).
 MORPH_BLUR_SIGMA = 10.0
 FIDELITY_N_PERTURB_SAMPLES = 25
+# Local explanations use the noisy baseline of Yeh et al. (2019), global ones
+# square removal. Both land under the same "fidelity" key, so the scores of the
+# two families are not comparable and must not be ranked against each other.
 FIDELITY_NOISE_STD = 0.2
+FIDELITY_SQUARE_SIZE = 56
+# Same reference point as the IntegratedGradients/DeepLift/GradientShap
+# baselines in the catalog, so a removed patch means the same thing everywhere.
+FIDELITY_SQUARE_BASELINE = 0.0
 FIDELITY_MAX_EXAMPLES_PER_BATCH = 5
 FIDELITY_RANDOM_SEED = 0
 METRIC_BATCH_SIZE = 32

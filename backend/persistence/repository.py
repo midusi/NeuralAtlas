@@ -6,7 +6,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Any, Iterator, Mapping
 
 from backend import config
 from backend.methods import MethodCatalogEntry, method_catalog
@@ -162,6 +162,67 @@ class OutputRepository:
 
     def _run_summary_path(self, model: str, dataset: str) -> Path:
         return self._run_dir(model, dataset) / "summary.json"
+
+    def vlm_descriptions_path(self, model: str, dataset: str, class_id: str) -> Path:
+        return self._run_dir(model, dataset) / "vlm" / f"{class_id}.json"
+
+    def load_vlm_descriptions(
+        self,
+        model: str,
+        dataset: str,
+        class_id: str,
+    ) -> dict[str, Any] | None:
+        """Load a class shard, checking its identity and image mapping shape."""
+        path = self.vlm_descriptions_path(model, dataset, class_id)
+        if not path.exists():
+            return None
+        with path.open() as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Invalid VLM description shard: {path}")
+        identity = (payload.get("model"), payload.get("dataset"), payload.get("class_id"))
+        if identity != (model, dataset, class_id):
+            raise ValueError(f"VLM description shard identity does not match its path: {path}")
+        images = payload.get("images")
+        if not isinstance(images, dict) or not all(
+            isinstance(entry, dict) for entry in images.values()
+        ):
+            raise ValueError(f"Invalid VLM description shard images: {path}")
+        return payload
+
+    def upsert_vlm_description(
+        self,
+        model: str,
+        dataset: str,
+        class_id: str,
+        image_id: str,
+        method: str,
+        generator: Mapping[str, object],
+        description: Mapping[str, str],
+        *,
+        force: bool = False,
+    ) -> Path:
+        payload = self.load_vlm_descriptions(model, dataset, class_id)
+        stale = payload is None or payload.get("generator") != generator
+        if stale and payload is not None and not force:
+            raise ValueError(
+                f"VLM generator mismatch for {model}/{dataset}/{class_id}; use force to replace the shard"
+            )
+        if stale:
+            payload = {
+                "schema_version": 1,
+                "model": model,
+                "dataset": dataset,
+                "class_id": class_id,
+                "generator": dict(generator),
+                "images": {},
+            }
+
+        payload["images"].setdefault(image_id, {})[method] = dict(description)
+
+        path = self.vlm_descriptions_path(model, dataset, class_id)
+        _atomic_write_json(path, payload)
+        return path
 
     def load_images(self, model: str, dataset: str) -> list[ImageRecord]:
         payload = _read_json(self._run_images_path(model, dataset), {"model": model, "dataset": dataset, "images": []})

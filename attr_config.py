@@ -37,7 +37,7 @@ class AttributionConfig:
         if self._attributor is None or self._bound_model_id != mid:
             self._attributor = self.attribution_class(
                 model,
-                **({"layer": self.layer} if self.layer else {}),
+                **({"layer": self.layer} if self.layer is not None else {}),
             )
             self._bound_model_id = mid
         return self._attributor

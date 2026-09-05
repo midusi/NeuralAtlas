@@ -12,11 +12,28 @@ if TYPE_CHECKING:
     from torch import nn
 
 
+LOCAL_FAMILY = "local"
+GLOBAL_FAMILY = "global"
+
+# Every model in the catalog is Resize(256) + CenterCrop(224) on RGB, so the
+# lift to input space and the zero baselines all share one shape.
+INPUT_SIZE = 224
+INPUT_CHANNELS = 3
+
+
 @dataclass(frozen=True, slots=True)
 class MethodCatalogEntry:
+    """One attribution method as exposed to the viewer.
+
+    `family` selects the infidelity perturbation (Yeh et al., 2019, §2.5):
+    local methods report sensitivity; global methods estimate output change.
+    `category` describes computation, so a gradient method can be global.
+    """
+
     id: str
     label: str
     category: str
+    family: str
     requires_layer: bool = False
     segmentation: str | None = None
 
@@ -25,6 +42,7 @@ class MethodCatalogEntry:
             "id": self.id,
             "label": self.label,
             "category": self.category,
+            "family": self.family,
             "requires_layer": self.requires_layer,
             "segmentation": self.segmentation,
         }
@@ -38,26 +56,57 @@ class InsufficientFeaturesError(ValueError):
         )
 
 
-def to_rgb_heatmap(attr: object) -> torch.Tensor:
+def to_input_space(attr: object) -> torch.Tensor:
+    """Lift a layer attribution to input resolution, keeping its sign.
+
+    Sum layer channels to preserve signed evidence, then divide across input
+    channels to avoid counting each pixel three times in infidelity.
+    """
     from captum.attr import LayerAttribution
 
     if not isinstance(attr, torch.Tensor):
         raise TypeError(f"Expected Tensor, got {type(attr)}")
-
-    if attr.dim() == 4:
-        attr = attr.abs().mean(dim=1, keepdim=True)
-    elif attr.dim() == 3:
-        attr = attr.abs().mean(dim=0, keepdim=True)
-        attr = attr.unsqueeze(0)
-    else:
+    if attr.dim() != 4:
         raise ValueError(f"Unexpected attribution shape: {tuple(attr.shape)}")
 
+    attr = attr.sum(dim=1, keepdim=True)
     attr = LayerAttribution.interpolate(
         attr,
-        (224, 224),
+        (INPUT_SIZE, INPUT_SIZE),
         interpolate_mode="bilinear",
     )
-    return attr.repeat(1, 3, 1, 1)
+    return attr.expand(-1, INPUT_CHANNELS, -1, -1) / INPUT_CHANNELS
+
+
+class SignedGuidedGradCam:
+    """GuidedGradCam with the Grad-CAM ReLU exposed instead of hardcoded.
+
+    Multiply GuidedBackprop by interpolated LayerGradCam, allowing signed CAMs.
+    """
+
+    def __init__(self, model: "nn.Module", layer: "nn.Module") -> None:
+        from captum.attr import GuidedBackprop, LayerGradCam
+
+        self.grad_cam = LayerGradCam(model, layer)
+        self.guided_backprop = GuidedBackprop(model)
+
+    def attribute(
+        self,
+        inputs: "TensorOrTupleOfTensorsGeneric",
+        target: object,
+        relu_attributions: bool,
+    ) -> torch.Tensor:
+        grad_cam = self.grad_cam.attribute(
+            inputs,
+            target,
+            relu_attributions=relu_attributions,
+        )
+        guided = self.guided_backprop.attribute(inputs, target)
+        return guided * self.grad_cam.interpolate(
+            grad_cam,
+            tuple(inputs.shape[2:]),
+            interpolate_mode="bilinear",
+        )
 
 
 def make_superpixel_mask(
@@ -145,19 +194,25 @@ def _make_superpixel_runtime_kwargs(mask_fn: Callable[..., object], **seg_kwargs
 
 def method_catalog() -> list[MethodCatalogEntry]:
     base_entries = [
-        MethodCatalogEntry("CB-RISE", "CB-RISE", "perturbation"),
-        MethodCatalogEntry("RISE", "RISE", "perturbation"),
-        MethodCatalogEntry("Occlusion", "Occlusion", "perturbation"),
-        MethodCatalogEntry("GuidedGradCam", "GuidedGradCam", "gradient", True),
-        MethodCatalogEntry("GradientShap", "GradientShap", "gradient"),
-        MethodCatalogEntry("Saliency", "Saliency", "gradient"),
-        MethodCatalogEntry("IntegratedGradients", "IntegratedGradients", "gradient"),
-        MethodCatalogEntry("LayerGradCam", "LayerGradCam", "gradient", True),
-        MethodCatalogEntry("DeepLift", "DeepLift", "gradient"),
-        MethodCatalogEntry("GuidedBackprop", "GuidedBackprop", "gradient"),
-        MethodCatalogEntry("InputXGradient", "InputXGradient", "gradient"),
-        MethodCatalogEntry("Deconvolution", "Deconvolution", "gradient"),
-        MethodCatalogEntry("LayerIntegratedGradients", "LayerIntegratedGradients", "gradient", True),
+        MethodCatalogEntry("CB-RISE", "CB-RISE", "perturbation", GLOBAL_FAMILY),
+        MethodCatalogEntry("RISE", "RISE", "perturbation", GLOBAL_FAMILY),
+        MethodCatalogEntry("Occlusion", "Occlusion", "perturbation", GLOBAL_FAMILY),
+        MethodCatalogEntry("GuidedGradCam", "GuidedGradCam", "gradient", LOCAL_FAMILY, True),
+        MethodCatalogEntry("GradientShap", "GradientShap", "gradient", GLOBAL_FAMILY),
+        MethodCatalogEntry("Saliency", "Saliency", "gradient", LOCAL_FAMILY),
+        MethodCatalogEntry("IntegratedGradients", "IntegratedGradients", "gradient", GLOBAL_FAMILY),
+        MethodCatalogEntry("LayerGradCam", "LayerGradCam", "gradient", LOCAL_FAMILY, True),
+        MethodCatalogEntry("DeepLift", "DeepLift", "gradient", GLOBAL_FAMILY),
+        MethodCatalogEntry("GuidedBackprop", "GuidedBackprop", "gradient", LOCAL_FAMILY),
+        MethodCatalogEntry("InputXGradient", "InputXGradient", "gradient", GLOBAL_FAMILY),
+        MethodCatalogEntry("Deconvolution", "Deconvolution", "gradient", LOCAL_FAMILY),
+        MethodCatalogEntry(
+            "LayerIntegratedGradients",
+            "LayerIntegratedGradients",
+            "gradient",
+            GLOBAL_FAMILY,
+            True,
+        ),
     ]
     segmented_methods = ["Lime", "KernelShap"]
     segmentations = ["SLIC", "KMeans"]
@@ -168,6 +223,7 @@ def method_catalog() -> list[MethodCatalogEntry]:
                     id=f"{method_name} ({segmentation})",
                     label=f"{method_name} ({segmentation})",
                     category="perturbation",
+                    family=GLOBAL_FAMILY,
                     segmentation=segmentation,
                 )
             )
@@ -177,20 +233,15 @@ def method_catalog() -> list[MethodCatalogEntry]:
 def build_interp_methods(
     last_conv_layer: "nn.Module",
     device: "torch.device",
-    to_rgb_heatmap: Callable[
-        ["TensorOrTupleOfTensorsGeneric"], "TensorOrTupleOfTensorsGeneric"
-    ],
 ) -> list[AttributionConfig]:
     from captum.attr import (
         Deconvolution,
         DeepLift,
         GradientShap,
         GuidedBackprop,
-        GuidedGradCam,
         InputXGradient,
         IntegratedGradients,
         KernelShap,
-        LayerAttribution,
         LayerGradCam,
         LayerIntegratedGradients,
         Lime,
@@ -216,6 +267,8 @@ def build_interp_methods(
         random_state=0,
         n_init=10,
     )
+    # Shared reference point, matching FIDELITY_SQUARE_BASELINE.
+    zero_baseline = torch.zeros(1, INPUT_CHANNELS, INPUT_SIZE, INPUT_SIZE, device=device)
 
     return [
         AttributionConfig(
@@ -245,28 +298,34 @@ def build_interp_methods(
             strides=(3, 8, 8),
             perturbations_per_eval=16,
         ),
-        AttributionConfig(GuidedGradCam, layer=last_conv_layer),
+        AttributionConfig(
+            SignedGuidedGradCam,
+            layer=last_conv_layer,
+            relu_attributions=False,
+            name="GuidedGradCam",
+        ),
         AttributionConfig(
             GradientShap,
             n_samples=100,
             stdevs=0.05,
-            baselines=torch.zeros(1, 3, 224, 224, device=device),
+            baselines=zero_baseline,
         ),
-        AttributionConfig(Saliency),
+        AttributionConfig(
+            Saliency,
+            # Preserve the sign for infidelity.
+            abs=False,
+        ),
         AttributionConfig(IntegratedGradients, n_steps=50),
         AttributionConfig(
             LayerGradCam,
             layer=last_conv_layer,
-            relu_attributions=True,
-            callback=lambda attr: LayerAttribution.interpolate(
-                attr,
-                (224, 224),
-                interpolate_mode="bilinear",
-            ).repeat(1, 3, 1, 1),
+            # Preserve the sign for infidelity.
+            relu_attributions=False,
+            callback=to_input_space,
         ),
         AttributionConfig(
             DeepLift,
-            baselines=torch.zeros(1, 3, 224, 224, device=device),
+            baselines=zero_baseline,
         ),
         AttributionConfig(GuidedBackprop),
         AttributionConfig(InputXGradient),
@@ -302,9 +361,9 @@ def build_interp_methods(
         AttributionConfig(
             LayerIntegratedGradients,
             layer=last_conv_layer,
-            baselines=torch.zeros(1, 3, 224, 224, device=device),
+            baselines=zero_baseline,
             n_steps=50,
             attribute_to_layer_input=False,
-            callback=to_rgb_heatmap,
+            callback=to_input_space,
         ),
     ]

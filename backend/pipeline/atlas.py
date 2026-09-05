@@ -16,8 +16,25 @@ from tqdm.auto import tqdm
 
 from attr_config import AttributionConfig
 from backend import config
-from backend.methods import InsufficientFeaturesError
+from backend.methods import (
+    GLOBAL_FAMILY,
+    LOCAL_FAMILY,
+    InsufficientFeaturesError,
+    method_catalog,
+)
+from backend.metrics.fidelity_score import GaussianNoise, Perturbation, SquareRemoval
 from backend.records import AttributionFailure, ImageRecord, MetricValue, PredictionRecord
+
+# Yeh et al. (2019) pair each explanation family with its own perturbation
+# (section 2.5); this is the only place that mapping is decided. Both are
+# frozen and stateless, so one instance each is shared by every method.
+PERTURBATION_FOR_FAMILY: dict[str, Perturbation] = {
+    LOCAL_FAMILY: GaussianNoise(std=config.FIDELITY_NOISE_STD),
+    GLOBAL_FAMILY: SquareRemoval(
+        size=config.FIDELITY_SQUARE_SIZE,
+        baseline=config.FIDELITY_SQUARE_BASELINE,
+    ),
+}
 
 
 def evaluate_faithfulness(
@@ -26,6 +43,7 @@ def evaluate_faithfulness(
     attribution: torch.Tensor,
     target: torch.Tensor,
     metrics: set[str],
+    perturbation: Perturbation,
     segments: torch.Tensor | None = None,
 ) -> dict[str, MetricValue]:
     """Faithfulness scores for one attribution map, keyed by metric name.
@@ -34,7 +52,9 @@ def evaluate_faithfulness(
     (channel sum, absolute value) and min-max normalized to [0, 1] so the
     morphology threshold is meaningful across methods with different scales.
     Fidelity instead receives the original, unreduced attribution tensor
-    because its magnitude is part of the underlying infidelity calculation.
+    because its magnitude and sign are part of the underlying infidelity
+    calculation, and `perturbation` is the one Yeh et al. (2019) pair with the
+    method's explanation family.
     """
     from backend.metrics import (
         FidelityScore,
@@ -82,7 +102,7 @@ def evaluate_faithfulness(
         metric = FidelityScore(model, inputs, attribution, target)
         metric.update(
             n_perturb_samples=config.FIDELITY_N_PERTURB_SAMPLES,
-            noise_std=config.FIDELITY_NOISE_STD,
+            perturbation=perturbation,
             max_examples_per_batch=config.FIDELITY_MAX_EXAMPLES_PER_BATCH,
             random_seed=config.FIDELITY_RANDOM_SEED,
         )
@@ -289,6 +309,20 @@ class AtlasRunner:
         image_ext = image_ext.lstrip(".").lower()
 
         keys = sample_keys(self.data)[start_index:]
+        perturbations = {
+            entry.id: PERTURBATION_FOR_FAMILY[entry.family]
+            for entry in method_catalog()
+        }
+        uncatalogued = sorted(
+            name for name in map(str, self.interp_methods) if name not in perturbations
+        )
+        if metrics and uncatalogued:
+            raise ValueError(
+                "No explanation family for: "
+                + ", ".join(uncatalogued)
+                + ". Add the method to `method_catalog()`; the family selects which "
+                "infidelity perturbation the metric samples."
+            )
 
         with tqdm(total=len(window), desc="Interpreting + Saving") as pbar:
             for offset, (inputs, target) in enumerate(dataloader):
@@ -368,6 +402,7 @@ class AtlasRunner:
                                     attribution,
                                     attribution_target,
                                     metrics,
+                                    perturbations[method_name],
                                     segments,
                                 )
                             )
