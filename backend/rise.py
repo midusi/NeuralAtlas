@@ -4,7 +4,7 @@ import math
 
 import torch
 from captum._utils.common import ExpansionTypes, _expand_target, _select_targets
-from captum._utils.typing import Module, TargetType
+from captum._utils.typing import TargetType
 from captum.attr import Attribution
 from torch.nn import functional as F
 
@@ -37,9 +37,6 @@ class RISE(Attribution):
     memory use does not grow with ``n_masks``. The map is finished by
     `centered_saliency`, which documents how it departs from the paper.
     """
-
-    def __init__(self, forward_func: Module) -> None:
-        super().__init__(forward_func)
 
     @staticmethod
     def _generate_masks(

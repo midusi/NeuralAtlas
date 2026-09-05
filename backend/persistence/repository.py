@@ -73,10 +73,6 @@ class MetricsBucket:
     per_class: dict[str, ClassMetricsBucket] = field(default_factory=dict)
 
 
-def _create_metrics_bucket() -> MetricsBucket:
-    return MetricsBucket()
-
-
 def _get_per_class_bucket(bucket: MetricsBucket, class_id: str) -> ClassMetricsBucket:
     if class_id not in bucket.per_class:
         bucket.per_class[class_id] = ClassMetricsBucket()
@@ -107,14 +103,13 @@ def _record_prediction(
 
 
 def _finalize_metrics_bucket(bucket: MetricsBucket) -> dict[str, int | float]:
-    per_class_entries = list(bucket.per_class.values())
-    class_count = len(per_class_entries)
+    class_count = len(bucket.per_class)
 
     precision_sum = 0.0
     recall_sum = 0.0
     f1_sum = 0.0
 
-    for class_bucket in per_class_entries:
+    for class_bucket in bucket.per_class.values():
         tp = class_bucket.tp
         fp = class_bucket.fp
         fn = class_bucket.fn
@@ -490,7 +485,7 @@ class OutputRepository:
         dataset: str,
         records: list[ImageRecord],
     ) -> dict[str, object]:
-        bucket = _create_metrics_bucket()
+        bucket = MetricsBucket()
         class_ids = set()
         methods = set()
         for record in records:

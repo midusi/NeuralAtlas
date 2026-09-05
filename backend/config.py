@@ -6,8 +6,6 @@ DATASET_NAME = "imagenet-pico-ai"
 BASE_PUBLIC_DIR = Path("interpretability-viewer/public")
 OUTPUT_ROOT = BASE_PUBLIC_DIR / "outputs"
 OUTPUT_IMAGES_DIR = OUTPUT_ROOT / "images"
-OUTPUT_CATALOGS_DIR = OUTPUT_ROOT / "catalogs"
-OUTPUT_RUNS_DIR = OUTPUT_ROOT / "runs"
 DEFAULT_IMAGE_EXT = "avif"
 DEFAULT_NUM_SAMPLES = 20
 DEFAULT_EXPORT_BATCH_IMAGES = 5
@@ -39,27 +37,3 @@ ATTRIBUTION_ENCODING = {
     "colormap": "jet",
     "colormap_applied_by": "frontend",
 }
-
-
-def manifest_path() -> Path:
-    return OUTPUT_ROOT / "manifest.json"
-
-
-def models_catalog_path() -> Path:
-    return OUTPUT_CATALOGS_DIR / "models.json"
-
-
-def methods_catalog_path() -> Path:
-    return OUTPUT_CATALOGS_DIR / "methods.json"
-
-
-def run_dir(model: str, dataset: str) -> Path:
-    return OUTPUT_RUNS_DIR / model / dataset
-
-
-def run_images_path(model: str, dataset: str) -> Path:
-    return run_dir(model, dataset) / "images.json"
-
-
-def run_summary_path(model: str, dataset: str) -> Path:
-    return run_dir(model, dataset) / "summary.json"

@@ -252,14 +252,6 @@ function buildOutputStructure(manifest, runPayloads) {
     }
   }
 
-  for (const modelNode of Object.values(structure.models)) {
-    const datasets = modelNode?.datasets ?? EMPTY_OBJ;
-    const firstDatasetWithMetrics = Object.values(datasets).find((datasetNode) => datasetNode?.metrics);
-    if (firstDatasetWithMetrics?.metrics) {
-      modelNode.metrics = firstDatasetWithMetrics.metrics;
-    }
-  }
-
   return structure;
 }
 
@@ -328,29 +320,6 @@ function getClassCompareMatrix(records, { dataset, classId, models: allowed }) {
   });
 
   return { models, rows };
-}
-
-function getModelMetrics(outputStructure) {
-  const models = outputStructure?.models ?? EMPTY_OBJ;
-  const byModel = {};
-  const byModelAndDataset = {};
-
-  for (const [modelName, modelNode] of Object.entries(models)) {
-    const datasets = modelNode?.datasets ?? EMPTY_OBJ;
-    byModelAndDataset[modelName] = {};
-
-    if (modelNode?.metrics) {
-      byModel[modelName] = modelNode.metrics;
-    }
-
-    for (const [datasetName, datasetNode] of Object.entries(datasets)) {
-      if (datasetNode?.metrics) {
-        byModelAndDataset[modelName][datasetName] = datasetNode.metrics;
-      }
-    }
-  }
-
-  return { byModel, byModelAndDataset };
 }
 
 function formatMetricPercent(value) {
@@ -1583,11 +1552,6 @@ function ModelForm({ outputStructure }) {
     [outputStructure, lblCache]
   );
 
-  const modelMetrics = useMemo(
-    () => getModelMetrics(outputStructure),
-    [outputStructure]
-  );
-
   const classOptions = useMemo(() => {
     if (!effectiveDataset) return [];
     const labels = lblCache[effectiveDataset] ?? {};
@@ -1755,7 +1719,7 @@ function ModelForm({ outputStructure }) {
   );
 
   const selectedModelStats = effectiveModel && effectiveDataset
-    ? modelMetrics.byModelAndDataset[effectiveModel]?.[effectiveDataset] ?? null
+    ? modelsStruct[effectiveModel]?.datasets?.[effectiveDataset]?.metrics ?? null
     : null;
 
   const hasContent =
