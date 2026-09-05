@@ -18,6 +18,15 @@ from torchvision.models.resnet import (
 if TYPE_CHECKING:
     pass
 
+# The crop every model in the catalog is trained on. Shared with `backend.vlm`
+# so the VLM is shown exactly the pixels the classifier saw.
+MODEL_VIEW = transforms.Compose(
+    [
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+    ]
+)
+
 
 @dataclass(slots=True)
 class ModelRuntime:
@@ -243,8 +252,7 @@ def build_model_runtime(model_name: str) -> ModelRuntime:
 
     transform = transforms.Compose(
         [
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+            MODEL_VIEW,
             transforms.ToTensor(),
             transforms.Lambda(lambda x: x.to(device=device, dtype=dtype)),
         ]
