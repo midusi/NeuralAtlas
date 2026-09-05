@@ -5,7 +5,6 @@ import { useAtlasFavicon } from './atlas-mark';
 import './App.css';
 import { FACT_KEYS, lookupWiki } from './wiki';
 
-const EMPTY_OBJ = {};
 const BASE_URL = import.meta.env.BASE_URL ?? '/';
 const USE_LOCAL_ASSETS = import.meta.env.VITE_ASSET_SOURCE === 'local';
 
@@ -217,76 +216,42 @@ function resolveRunOutputUrl(baseUrl, classId, outputPath) {
   return `${String(baseUrl).replace(/\/+$/, '')}/${encodeURIComponent(classId)}/${encodeURIComponent(filename)}`;
 }
 
-function buildOutputStructure(manifest, runPayloads) {
-  const structure = { models: {} };
-
-  for (const model of manifest?.models ?? []) {
-    const datasets = manifest?.datasets_by_model?.[model] ?? [];
-    const modelNode = structure.models[model] ??= { datasets: {} };
-
-    for (const dataset of datasets) {
-      const runKey = `${model}::${dataset}`;
-      const run = runPayloads[runKey];
-      const datasetNode = modelNode.datasets[dataset] ??= { classes: {} };
-
-      if (run?.summary?.metrics) {
-        datasetNode.metrics = run.summary.metrics;
-      }
-
-      for (const image of run?.images?.images ?? []) {
-        const classId = String(image.class_id);
-        const imageId = String(image.image_id);
-        const classNode = datasetNode.classes[classId] ??= { images: {} };
-        classNode.images[imageId] = {
-          outputs: Object.fromEntries(
-            Object.entries(image.outputs ?? {}).map(([method, outputPath]) => [
-              method,
-              resolveRunOutputUrl(run.baseUrl, classId, outputPath),
-            ])
-          ),
-          prediction: image.prediction ?? null,
-          interpretability_metrics: image.interpretability_metrics ?? {},
-          original_url: image.original_url ?? null,
-        };
-      }
-    }
-  }
-
-  return structure;
-}
-
 function filenameFromUrl(url) {
   if (!url) return null;
   return decodeURIComponent(String(url).split(/[?#]/)[0].split('/').pop());
 }
 
-function buildImageRecords(outputStructure, lblCache) {
+function buildAtlasData(manifest, runPayloads) {
+  const models = {};
   const records = [];
-  for (const [model, { datasets = {} }] of Object.entries(outputStructure?.models ?? {})) {
-    for (const [dataset, { classes = {} }] of Object.entries(datasets)) {
-      const lblLookup = lblCache?.[dataset] ?? {};
-      for (const [classId, { images = {} }] of Object.entries(classes)) {
-        const classLabel = lblLookup[classId] ?? classId;
-        for (const [imageId, {
-          outputs = {}, prediction = null, original_url: originalUrl = null,
-          interpretability_metrics: interpretabilityMetrics = {},
-        } = {}] of Object.entries(images)) {
-          const filename = filenameFromUrl(originalUrl);
-          records.push({
-            model, dataset, classId, classLabel, imageId, filename,
-            originalUrl,
-            outputs,
-            prediction,
-            interpretabilityMetrics,
-          });
-        }
+  for (const model of manifest?.models ?? []) {
+    // Keep metadata for empty runs so their model and dataset remain selectable.
+    models[model] = {};
+    for (const dataset of manifest?.datasets_by_model?.[model] ?? []) {
+      const run = runPayloads[`${model}::${dataset}`];
+      models[model][dataset] = run?.summary?.metrics ?? null;
+      const images = new Map();
+      for (const image of run?.images?.images ?? []) {
+        const classId = String(image.class_id), imageId = String(image.image_id);
+        const originalUrl = image.original_url ?? null;
+        images.set(JSON.stringify([classId, imageId]), {
+          model, dataset, classId, imageId, originalUrl,
+          filename: filenameFromUrl(originalUrl),
+          outputs: Object.fromEntries(Object.entries(image.outputs ?? {}).map(([method, path]) => [
+            method, resolveRunOutputUrl(run.baseUrl, classId, path),
+          ])),
+          prediction: image.prediction ?? null,
+          interpretabilityMetrics: image.interpretability_metrics ?? {},
+        });
       }
+      records.push(...images.values());
     }
   }
-  return records.sort((a, b) =>
+  records.sort((a, b) =>
     a.dataset.localeCompare(b.dataset) || compareMixedIds(a.classId, b.classId) ||
     compareMixedIds(a.imageId, b.imageId) || a.model.localeCompare(b.model)
   );
+  return { models, records };
 }
 
 // `models` is an allow-list: the columns the rail left checked. Rows are built
@@ -364,15 +329,24 @@ function applyJet(img, canvas, overlay) {
   ctx.putImageData(d, 0, 0);
 }
 
-function JetCanvas({ src, className, alt, overlay = false, opacity }) {
+function JetCanvas({ src, className, alt, overlay = false, opacity, onPainted }) {
   const canvasRef = useRef(null);
   const imageRef = useRef(null);
   const overlayRef = useRef(overlay);
   overlayRef.current = overlay;
+  const paintedRef = useRef(onPainted);
+  paintedRef.current = onPainted;
   useEffect(() => {
     if (!src) return undefined;
     const img = new Image();
     let cancelled = false;
+
+    // The canvas is reused across src changes, so its old pixels survive until
+    // the next image loads — and forever if that one 404s. Wipe it first: a
+    // blank tile is honest, a stale heatmap from the previous image is not.
+    const canvas = canvasRef.current;
+    if (canvas) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    imageRef.current = null;
 
     // Needed so the canvas can read pixels for the jet colormap when the heatmap is
     // served cross-origin (Hugging Face). HF reflects the request Origin in its CORS
@@ -383,8 +357,10 @@ function JetCanvas({ src, className, alt, overlay = false, opacity }) {
       if (!cancelled) {
         imageRef.current = img;
         applyJet(img, canvasRef.current, overlayRef.current);
+        paintedRef.current?.(src);
       }
     };
+    img.onerror = () => { if (!cancelled) imageRef.current = null; };
     img.src = src;
 
     return () => {
@@ -409,11 +385,29 @@ function JetCanvas({ src, className, alt, overlay = false, opacity }) {
 // Heatmap, optionally composited over the model-view crop of the original.
 function Attribution({ src, originalSrc, alt, className }) {
   const { enabled, opacity } = useOverlay();
+  // The heatmap is decoded and repainted asynchronously, and the base <img>
+  // keeps showing the *previous* photo until the new one decodes. Left alone
+  // that plays as a slideshow — old original, new original, then the map. So
+  // the stack tracks which src it has actually painted and stays invisible
+  // until that is the src it was asked for: no bare photo posing as a map.
+  const [paintedSrc, setPaintedSrc] = useState(null);
+  const [paintedBase, setPaintedBase] = useState(null);
   if (!originalSrc) return <JetCanvas className={className} src={src} alt={alt} />;
+  const ready = paintedSrc === src && paintedBase === originalSrc;
   return (
-    <div className={`${className} overlay-stack`}>
-      <img className="overlay-stack__base" src={originalSrc} alt="" loading="lazy" />
-      <JetCanvas className="overlay-stack__heat" src={src} alt={alt} overlay={enabled} opacity={enabled ? opacity : 1} />
+    <div className={`${className} overlay-stack${ready ? ' is-ready' : ''}`}>
+      <img
+        className="overlay-stack__base" src={originalSrc} alt="" loading="lazy"
+        // A base that 404s still counts as settled: the map is the point, and
+        // it reads fine over the bare bed.
+        onLoad={() => setPaintedBase(originalSrc)}
+        onError={() => setPaintedBase(originalSrc)}
+      />
+      <JetCanvas
+        className="overlay-stack__heat" src={src} alt={alt}
+        overlay={enabled} opacity={enabled ? opacity : 1}
+        onPainted={setPaintedSrc}
+      />
     </div>
   );
 }
@@ -1451,8 +1445,8 @@ function resolveSelection(options, currentValue) {
 
 /* ── Main Form ──────────────────────────────────────────────── */
 
-function ModelForm({ outputStructure }) {
-  const modelsStruct = outputStructure?.models ?? EMPTY_OBJ;
+function ModelForm({ atlas }) {
+  const { models, records } = atlas;
 
   const [vs, setVs] = useState(() => ({
     mode: 'single', model: null, dataset: null, classId: null, imageId: null, methods: null,
@@ -1507,19 +1501,19 @@ function ModelForm({ outputStructure }) {
     if (isPhone()) scrollIntoViewSoon(panelRef.current);
   };
 
-  const modelOptions = useMemo(() => Object.keys(modelsStruct).sort(), [modelsStruct]);
+  const modelOptions = useMemo(() => Object.keys(models).sort(), [models]);
 
   const effectiveModel = resolveSelection(modelOptions, vs.model);
 
   const datasetOptions = useMemo(() => {
     if (vs.mode === 'class_compare') {
       return [...new Set(
-        Object.values(modelsStruct).flatMap((model) => Object.keys(model?.datasets ?? {}))
+        Object.values(models).flatMap((datasets) => Object.keys(datasets))
       )].sort(compareMixedIds);
     }
     if (!effectiveModel) return [];
-    return Object.keys(modelsStruct[effectiveModel]?.datasets ?? {}).sort(compareMixedIds);
-  }, [vs.mode, effectiveModel, modelsStruct]);
+    return Object.keys(models[effectiveModel] ?? {}).sort(compareMixedIds);
+  }, [vs.mode, effectiveModel, models]);
 
   const effectiveDataset = resolveSelection(datasetOptions, vs.dataset);
 
@@ -1548,32 +1542,30 @@ function ModelForm({ outputStructure }) {
   }, [effectiveDataset, lblCache]);
 
   const imageRecords = useMemo(
-    () => buildImageRecords(outputStructure, lblCache),
-    [outputStructure, lblCache]
+    () => records.map((r) => ({ ...r, classLabel: lblCache[r.dataset]?.[r.classId] ?? r.classId })),
+    [records, lblCache]
   );
 
   const classOptions = useMemo(() => {
     if (!effectiveDataset) return [];
     const labels = lblCache[effectiveDataset] ?? {};
-    const classes = vs.mode === 'class_compare'
-      ? Object.values(modelsStruct).flatMap((model) =>
-          Object.keys(model?.datasets?.[effectiveDataset]?.classes ?? {})
-        )
-      : Object.keys(modelsStruct[effectiveModel]?.datasets?.[effectiveDataset]?.classes ?? {});
+    const classes = imageRecords.filter((r) => r.dataset === effectiveDataset &&
+      (vs.mode === 'class_compare' || r.model === effectiveModel)).map((r) => r.classId);
     return [...new Set(classes)].sort(compareMixedIds)
       .map((id) => ({ value: id, label: `${id} - ${labels[id] ?? id}` }));
-  }, [vs.mode, effectiveDataset, effectiveModel, lblCache, modelsStruct]);
+  }, [vs.mode, effectiveDataset, effectiveModel, lblCache, imageRecords]);
 
   const effectiveClassId = resolveSelection(classOptions, vs.classId);
 
-  const imageOptions = useMemo(() => {
-    if (!effectiveModel || !effectiveDataset || !effectiveClassId) return [];
-    const images = modelsStruct[effectiveModel]?.datasets?.[effectiveDataset]?.classes?.[effectiveClassId]?.images ?? {};
-    return Object.keys(images).sort(compareMixedIds).map((id) => ({
-      value: id,
-      label: images[id]?.original_url ? `${id} - ${filenameFromUrl(images[id].original_url)}` : id,
-    }));
-  }, [effectiveModel, effectiveDataset, effectiveClassId, modelsStruct]);
+  const modelGridRecords = useMemo(() => imageRecords.filter((r) =>
+    r.model === effectiveModel && r.dataset === effectiveDataset &&
+    (!effectiveClassId || r.classId === effectiveClassId)
+  ), [imageRecords, effectiveModel, effectiveDataset, effectiveClassId]);
+
+  const imageOptions = useMemo(() => modelGridRecords.map((r) => ({
+    value: r.imageId,
+    label: r.originalUrl ? `${r.imageId} - ${r.filename}` : r.imageId,
+  })), [modelGridRecords]);
 
   const effectiveImageId = vs.mode === 'single' ? resolveSelection(imageOptions, vs.imageId) : null;
 
@@ -1703,14 +1695,6 @@ function ModelForm({ outputStructure }) {
     };
   }, [imageRecords, vs.mode, effectiveModel, effectiveDataset, effectiveClassId, effectiveImageId, selectedMethods]);
 
-  const modelGridRecords = useMemo(() => {
-    if (!effectiveModel || !effectiveDataset) return [];
-    return imageRecords.filter((r) =>
-      r.model === effectiveModel && r.dataset === effectiveDataset &&
-      (!effectiveClassId || r.classId === effectiveClassId)
-    );
-  }, [imageRecords, effectiveModel, effectiveDataset, effectiveClassId]);
-
   const classCompareMatrix = useMemo(
     () => getClassCompareMatrix(imageRecords, {
       dataset: effectiveDataset, classId: effectiveClassId, models: selectedModels,
@@ -1719,7 +1703,7 @@ function ModelForm({ outputStructure }) {
   );
 
   const selectedModelStats = effectiveModel && effectiveDataset
-    ? modelsStruct[effectiveModel]?.datasets?.[effectiveDataset]?.metrics ?? null
+    ? models[effectiveModel]?.[effectiveDataset] ?? null
     : null;
 
   const hasContent =
@@ -1896,7 +1880,7 @@ function ModelForm({ outputStructure }) {
   );
 }
 
-async function loadOutputStructure(signal) {
+async function loadAtlasData(signal) {
   const manifest = await fetchJson('outputs/manifest.json', { signal });
 
   const entries = Object.entries(manifest?.runs ?? {}).flatMap(([model, datasets]) =>
@@ -1915,11 +1899,11 @@ async function loadOutputStructure(signal) {
     )
   );
 
-  return buildOutputStructure(manifest, runPayloads);
+  return buildAtlasData(manifest, runPayloads);
 }
 
 function App() {
-  const [outputStructure, setOutputStructure] = useState(null);
+  const [atlas, setAtlas] = useState(null);
   const [error, setError] = useState(null);
 
   useAtlasFavicon();
@@ -1927,8 +1911,8 @@ function App() {
   useEffect(() => {
   const controller = new AbortController();
 
-  loadOutputStructure(controller.signal)
-    .then(setOutputStructure)
+  loadAtlasData(controller.signal)
+    .then(setAtlas)
     .catch((e) => {
       if (e.name !== 'AbortError') setError(e);
     });
@@ -1937,9 +1921,9 @@ function App() {
 }, []);
 
   if (error) return <AppStatus>Could not read outputs/manifest.json. Check that the run outputs are published, then reload.</AppStatus>;
-  if (!outputStructure) return <AppStatus>Reading run manifest and attribution metadata.</AppStatus>;
+  if (!atlas) return <AppStatus>Reading run manifest and attribution metadata.</AppStatus>;
 
-  return <div className="app-shell"><ModelForm outputStructure={outputStructure} /></div>;
+  return <div className="app-shell"><ModelForm atlas={atlas} /></div>;
 }
 
 export default App;

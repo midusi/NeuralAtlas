@@ -1928,9 +1928,18 @@ body {
 
 /* ── Heatmap overlay ────────────────────────────────────────── */
 
+/* Hidden until both layers hold THIS image: the bed shows through, never the
+   original alone. Hiding is instant and only the reveal fades — a fade-out
+   would keep the stale photo on screen for exactly the flash we are killing. */
 .overlay-stack {
   position: relative;
   overflow: hidden;
+  opacity: 0;
+}
+
+.overlay-stack.is-ready {
+  opacity: 1;
+  transition: opacity var(--t-standard) ease;
 }
 
 .overlay-stack__base,
