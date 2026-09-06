@@ -277,9 +277,10 @@ class OutputRepository:
         keys: list[tuple[str, str]],
         image_ext: str,
         metrics: set[str],
+        methods: set[str] | None = None,
     ) -> int:
         """Length of the leading run of `keys` that has every catalog method complete."""
-        required = {entry.id for entry in method_catalog()}
+        required = methods or {entry.id for entry in method_catalog()}
         completed_by_key = self._completed_by_key(model, dataset, keys, image_ext, metrics)
         for index, completed in enumerate(completed_by_key):
             if not required <= completed:

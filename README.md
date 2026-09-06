@@ -38,6 +38,26 @@ uv run python scripts/run_sweep.py --dry-run     # print the plan, touch nothing
 uv run python scripts/run_sweep.py --chunk 100   # the real run
 ```
 
+Use `--methods` to recompute only selected attribution methods. A metadata-only run
+calculates and merges metrics without rendering image files, then uploads a JSON-only
+checkpoint after each chunk:
+
+```bash
+uv run python scripts/run_sweep.py \
+  --methods Occlusion GradientShap IntegratedGradients \
+  --metrics fidelity --recompute --metadata-only
+```
+
+Passing `--metrics` with no values makes metadata-only recompute predictions and
+aggregate accuracy without constructing attribution methods:
+
+```bash
+uv run python scripts/run_sweep.py --metadata-only --metrics
+```
+
+Both metadata-only and regular image sweeps upload one checkpoint per chunk; only the
+regular sweep includes rendered attribution files.
+
 Per (model, chunk) it runs the pipeline, uploads `outputs/images/<model>__<dataset>__*`
 plus only that model/dataset's `images.json` and `summary.json`, then deletes the
 uploaded images locally. GPU workers never publish shared catalogs or `manifest.json`,

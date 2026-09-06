@@ -292,6 +292,7 @@ class AtlasRunner:
         image_ext: str = "webp",
         metrics: set[str] | None = None,
         start_index: int = 0,
+        render_images: bool = True,
         **kwargs: Any,
     ) -> Iterator[ImageRecord]:
 
@@ -381,18 +382,19 @@ class AtlasRunner:
                                 "Streaming visualization requires tensor attribution output; "
                                 f"got {type(attribution)} from {method_name}."
                             )
-                        output_url = self.renderer.render(
-                            attr=attribution[0],
-                            output_dir=output_dir,
-                            model_name=model_name,
-                            dataset_name=dataset_name,
-                            class_id=class_id,
-                            image_id=image_id,
-                            method_name=method_name,
-                            image_ext=image_ext,
-                            **kwargs,
-                        )
-                        record.outputs[method_name] = output_url
+                        if render_images:
+                            output_url = self.renderer.render(
+                                attr=attribution[0],
+                                output_dir=output_dir,
+                                model_name=model_name,
+                                dataset_name=dataset_name,
+                                class_id=class_id,
+                                image_id=image_id,
+                                method_name=method_name,
+                                image_ext=image_ext,
+                                **kwargs,
+                            )
+                            record.outputs[method_name] = output_url
 
                         if metrics:
                             record.interpretability_metrics[method_name] = (

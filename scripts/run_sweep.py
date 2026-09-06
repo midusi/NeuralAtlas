@@ -41,6 +41,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from backend import config  # noqa: E402
 from backend.ai_dataset.core import load_env  # noqa: E402
+from backend.methods import method_catalog  # noqa: E402
 from backend.persistence import OutputRepository  # noqa: E402
 
 DEFAULT_MODELS = [
@@ -103,6 +104,15 @@ def validate_model_names(model_names: list[str]) -> None:
     raise SystemExit(
         "Unsupported torchvision ImageNet classification model(s): " + "; ".join(details)
     )
+
+
+def validate_method_names(method_names: list[str] | None) -> None:
+    if not method_names:
+        return
+    available = {entry.id for entry in method_catalog()}
+    invalid = sorted(set(method_names) - available)
+    if invalid:
+        raise SystemExit("Unsupported attribution method(s): " + ", ".join(invalid))
 
 
 def ensure_model_repos(api, repo_ids: list[str]) -> None:
@@ -191,6 +201,7 @@ def completed_samples(
     dataset: str,
     image_ext: str,
     metrics: list[str],
+    methods: set[str] | None = None,
 ) -> int:
     """Return the length of the contiguous, fully persisted dataset prefix."""
     from backend.pipeline.atlas import dataset_keys
@@ -201,6 +212,7 @@ def completed_samples(
         dataset_keys(dataset_dir(dataset) / "val"),
         image_ext,
         set(metrics),
+        methods,
     )
 
 
@@ -256,6 +268,12 @@ def run_step(model: str, dataset: str, start: int, target: int, args: argparse.N
         "--prune-stale-images",
         "--metrics", *args.metrics,
     ]
+    if args.methods:
+        command.extend(["--methods", *args.methods])
+    if args.recompute:
+        command.append("--recompute")
+    if args.metadata_only:
+        command.append("--metadata-only")
     log(f"$ {' '.join(command[1:])}")
     subprocess.run(command, check=True, cwd=REPO_ROOT)
 
@@ -278,11 +296,20 @@ def run_metadata_files(model: str, dataset: str) -> list[Path]:
     return [run_dir / "images.json", run_dir / "summary.json"]
 
 
-def upload_step(api, repo_id: str, model: str, label: str, dataset: str, image_ext: str) -> int:
+def upload_step(
+    api,
+    repo_id: str,
+    model: str,
+    label: str,
+    dataset: str,
+    image_ext: str,
+    *,
+    include_images: bool = True,
+) -> int:
     """Upload this worker's images and run metadata, never shared global metadata."""
     from huggingface_hub import CommitOperationAdd
 
-    files = step_image_files(model, dataset, image_ext)
+    files = step_image_files(model, dataset, image_ext) if include_images else []
     operations = []
     for path in files:
         parsed_model, parsed_dataset, _, _, _ = parse_output_filename(path.name)
@@ -345,6 +372,12 @@ def parse_args() -> argparse.Namespace:
                         choices=list(config.FAITHFULNESS_METRICS),
                         metavar="{" + ",".join(config.FAITHFULNESS_METRICS) + "}",
                         help="Faithfulness metrics to compute (default: all)")
+    parser.add_argument("--methods", nargs="+",
+                        help="Only run these attribution method ids (default: all)")
+    parser.add_argument("--recompute", action="store_true",
+                        help="Recompute the selected methods from the first sample")
+    parser.add_argument("--metadata-only", action="store_true",
+                        help="Do not render or upload images; commit run JSON after each chunk")
     parser.add_argument("--export-batch-images", type=int, default=10,
                         help="Images buffered before the run JSON is rewritten (default: 10)")
     parser.add_argument("--no-upload", action="store_true",
@@ -362,6 +395,8 @@ def main() -> None:
         raise SystemExit("--chunk and --total must be positive.")
     args.image_ext = args.image_ext.lstrip(".").lower()
     validate_model_names(args.models)
+    validate_method_names(args.methods)
+    force_full_window = args.recompute or (args.metadata_only and not args.metrics)
 
     load_env(REPO_ROOT / ".env")
     token = os.getenv("HF_TOKEN")
@@ -389,16 +424,30 @@ def main() -> None:
 
     available = ensure_dataset(args.dataset, dry_run=args.dry_run)
     total = min(args.total, available) if args.total else available
-    targets = [min(target, total) for target in range(args.chunk, total + args.chunk, args.chunk)]
+    targets = [
+        min(target, total)
+        for target in range(args.chunk, total + args.chunk, args.chunk)
+    ]
     repository = OutputRepository(REPO_ROOT / config.OUTPUT_ROOT)
 
     log(
         f"Plan: {len(args.models)} models x {total} samples in {len(targets)} steps of "
-        f"{args.chunk} | metrics={args.metrics or ['none']} | upload={upload} cleanup={cleanup}"
+        f"{args.chunk} | "
+        f"metrics={args.metrics or ['none']} | upload={upload} cleanup={cleanup}"
     )
     for model in args.models:
-        done = completed_samples(repository, model, args.dataset, args.image_ext, args.metrics)
-        log(f"  {model}: {done}/{total} samples already complete")
+        done = completed_samples(
+            repository,
+            model,
+            args.dataset,
+            args.image_ext,
+            args.metrics,
+            set(args.methods) if args.methods else None,
+        )
+        if force_full_window:
+            log(f"  {model}: 0/{total} samples scheduled for recompute")
+        else:
+            log(f"  {model}: {done}/{total} samples already complete")
     if args.dry_run:
         return
 
@@ -414,7 +463,11 @@ def main() -> None:
             metadata_complete = all(
                 path.is_file() for path in run_metadata_files(model, args.dataset)
             )
-            if pending and metadata_complete:
+            if args.metadata_only:
+                downloaded = sync_run_metadata(api, model_repo, model, args.dataset)
+                if downloaded:
+                    log(f"Restored {downloaded} checkpoint files from HF for {model}")
+            elif pending and metadata_complete:
                 log(f"Reconciling {len(pending)} leftover files for {model}")
                 upload_step(api, model_repo, model, f"{model} resume", args.dataset, args.image_ext)
                 if cleanup:
@@ -430,7 +483,16 @@ def main() -> None:
                 if downloaded:
                     log(f"Restored {downloaded} checkpoint files from HF for {model}")
 
-        done = completed_samples(repository, model, args.dataset, args.image_ext, args.metrics)
+        done = completed_samples(
+            repository,
+            model,
+            args.dataset,
+            args.image_ext,
+            args.metrics,
+            set(args.methods) if args.methods else None,
+        )
+        if force_full_window:
+            done = 0
         log(f"Starting {model} from remote-confirmed checkpoint {done}/{total}")
 
         for target in targets:
@@ -449,9 +511,18 @@ def main() -> None:
                 )
                 if upload:
                     uploaded = upload_step(
-                        api, model_repo, model, label, args.dataset, args.image_ext
+                        api,
+                        model_repo,
+                        model,
+                        label,
+                        args.dataset,
+                        args.image_ext,
+                        include_images=not args.metadata_only,
                     )
-                    log(f"Uploaded {uploaded} attribution files for {label}")
+                    if args.metadata_only:
+                        log(f"Uploaded metadata-only checkpoint for {label}")
+                    else:
+                        log(f"Uploaded {uploaded} attribution files for {label}")
             except Exception as error:
                 # Never clean up after a failed upload — the only copy is still local.
                 log(f"error: {label} failed ({error!r}); abandoning {model}")
@@ -459,7 +530,7 @@ def main() -> None:
                 break
 
             done = target
-            if cleanup:
+            if cleanup and not args.metadata_only:
                 log(f"Freed {cleanup_step(model, args.dataset, args.image_ext)} local files")
             free_gb = shutil.disk_usage(REPO_ROOT).free / 1e9
             log(f"Done {label} | {free_gb:.1f} GB free")

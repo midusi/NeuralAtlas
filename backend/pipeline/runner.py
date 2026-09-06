@@ -28,6 +28,14 @@ def run_generation(args: Namespace) -> None:
         )
     if args.export_batch_images <= 0:
         raise SystemExit("--export-batch-images must be a positive integer.")
+    selected_methods = getattr(args, "methods", None)
+    known_methods = {entry.id for entry in method_catalog()}
+    if selected_methods:
+        unknown_methods = sorted(set(selected_methods) - known_methods)
+        if unknown_methods:
+            raise SystemExit(
+                f"Unknown attribution method(s): {', '.join(unknown_methods)}"
+            )
 
     dataset_dir = config.BASE_PUBLIC_DIR / dataset_name / "val"
     if not dataset_dir.is_dir():
@@ -63,11 +71,19 @@ def run_generation(args: Namespace) -> None:
             f" (model={args.model}, dataset={dataset_name}, ext={args.image_ext})"
         )
 
-    interp_methods = build_interp_methods(
-        runtime.last_conv_layer,
-        runtime.device,
-    )
-    if not args.recompute:
+    if getattr(args, "metadata_only", False) and not args.metrics:
+        interp_methods = []
+    else:
+        interp_methods = build_interp_methods(
+            runtime.last_conv_layer,
+            runtime.device,
+        )
+        if selected_methods:
+            selected = set(selected_methods)
+            interp_methods = [
+                method for method in interp_methods if str(method) in selected
+            ]
+    if interp_methods and not args.recompute:
         complete = repository.methods_complete_for_all(
             args.model,
             dataset_name,
@@ -101,6 +117,7 @@ def run_generation(args: Namespace) -> None:
         dataset_name=dataset_name,
         image_ext=args.image_ext,
         metrics=set(args.metrics),
+        render_images=not getattr(args, "metadata_only", False),
     ):
         buffer.append(record)
         if len(buffer) >= args.export_batch_images:
