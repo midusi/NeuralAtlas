@@ -57,7 +57,7 @@ class InsufficientFeaturesError(ValueError):
 
 
 def to_input_space(attr: object) -> torch.Tensor:
-    """Lift a layer attribution to input resolution, keeping its sign.
+    """Lift a layer attribution to input resolution, keeping its sign and total.
 
     Sum layer channels to preserve signed evidence, then divide across input
     channels to avoid counting each pixel three times in infidelity.
@@ -70,11 +70,15 @@ def to_input_space(attr: object) -> torch.Tensor:
         raise ValueError(f"Unexpected attribution shape: {tuple(attr.shape)}")
 
     attr = attr.sum(dim=1, keepdim=True)
+    layer_cells = attr.shape[-2] * attr.shape[-1]
     attr = LayerAttribution.interpolate(
         attr,
         (INPUT_SIZE, INPUT_SIZE),
         interpolate_mode="bilinear",
     )
+    # Bilinear upsampling preserves values, inflating the sum by INPUT_SIZE^2 / layer_cells.
+    # Rescale so the lifted map sums to the original layer attribution.
+    attr = attr * (layer_cells / (INPUT_SIZE * INPUT_SIZE))
     return attr.expand(-1, INPUT_CHANNELS, -1, -1) / INPUT_CHANNELS
 
 

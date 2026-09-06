@@ -9,20 +9,20 @@
     "outlier_perc": 2.0,
     "sign": "absolute_value"
   },
-  "classCount": 10,
+  "classCount": 1000,
   "dataset": "imagenet-pico",
-  "imageCount": 20,
-  "methodCount": 20,
+  "imageCount": 3000,
+  "methodCount": 22,
   "metrics": {
-    "accuracy": 0.8,
-    "classCount": 11,
-    "correct": 16,
-    "incorrect": 4,
-    "macroF1": 0.7090909090909091,
-    "macroPrecision": 0.7424242424242425,
-    "macroRecall": 0.7272727272727273,
+    "accuracy": 0.7756666666666666,
+    "classCount": 1000,
+    "correct": 2327,
+    "incorrect": 673,
+    "macroF1": 0.7665095959595917,
+    "macroPrecision": 0.7998273809523806,
+    "macroRecall": 0.7756666666666651,
     "missingPredictions": 0,
-    "total": 20
+    "total": 3000
   },
   "model": "efficientnet_b0"
 }
