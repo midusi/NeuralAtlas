@@ -15,6 +15,10 @@ class GaussianNoise:
 
     Every pixel gets i.i.d. noise, which probes the sensitivity of the function
     around ``x`` -- what a local explanation reports.
+
+    A local attribution is a sensitivity per unit of input, so the change it
+    predicts is the first-order term ``delta^T a`` and the weight is ``delta``
+    itself.
     """
 
     std: float
@@ -28,24 +32,33 @@ class GaussianNoise:
         inputs: torch.Tensor,
         count: int,
         generator: torch.Generator,
-    ) -> torch.Tensor:
-        return torch.randn(
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        removed = torch.randn(
             (count,) + tuple(inputs.shape),
             device=inputs.device,
             dtype=inputs.dtype,
             generator=generator,
         ) * self.std
+        return removed, removed
 
 
 @dataclass(frozen=True, slots=True)
 class SquareRemoval:
     """Square removal of Yeh et al. (2019), for global explanations.
 
-    A uniformly placed square is replaced by ``baseline``, so ``delta`` is zero
-    outside the patch and ``delta^T a`` only sums the attributions inside it.
-    That asks the question a global explanation claims to answer -- how much
-    does the logit drop if this region is removed -- and moves the output enough
-    to carry signal, unlike small i.i.d. noise.
+    A uniformly placed square is replaced by ``baseline``, so the perturbation
+    is zero outside the patch. That asks the question a global explanation
+    claims to answer -- how much does the logit drop if this region is removed
+    -- and moves the output enough to carry signal, unlike small i.i.d. noise.
+
+    The weight here is the patch mask, not the perturbation: a global
+    attribution already carries the displacement from the baseline inside it
+    (Captum spells this `multiply_by_inputs`, after the local/global split of
+    Ancona et al., 2018), so the change it predicts is the attribution summed
+    over the removed region. Weighting by the perturbation as well would apply
+    the displacement twice; on a linear model with a zero baseline that turns
+    the exact prediction ``sum_i m_i w_i x_i`` into ``sum_i m_i w_i x_i^2``,
+    penalising an attribution that is right.
     """
 
     size: int
@@ -60,7 +73,7 @@ class SquareRemoval:
         inputs: torch.Tensor,
         count: int,
         generator: torch.Generator,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         batch, _, height, width = inputs.shape
         if self.size > min(height, width):
             raise ValueError("size must not exceed the smaller input side")
@@ -90,8 +103,12 @@ class SquareRemoval:
         in_columns = (columns >= lefts.unsqueeze(-1)) & (
             columns < (lefts + self.size).unsqueeze(-1)
         )
-        patch = (in_rows.unsqueeze(-1) & in_columns.unsqueeze(-2)).unsqueeze(2)
-        return patch.to(inputs.dtype) * removed.unsqueeze(0)
+        # (count, batch, 1, height, width); the channel axis broadcasts, so the
+        # weighted sum runs over every channel of the attribution.
+        mask = (
+            in_rows.unsqueeze(-1) & in_columns.unsqueeze(-2)
+        ).unsqueeze(2).to(inputs.dtype)
+        return mask * removed.unsqueeze(0), mask
 
 
 Perturbation = GaussianNoise | SquareRemoval
@@ -101,8 +118,11 @@ class FidelityScore(Metric):
     """Relative reduction in infidelity over a zero attribution.
 
     For each sampled perturbation ``delta``, the attribution predicts an output
-    change ``sum(delta * attribution)`` and the model supplies the observed
-    target-logit change ``f(x) - f(x - delta)``. The score is
+    change and the model supplies the observed target-logit change
+    ``f(x) - f(x - delta)``. The perturbation also supplies the weight the
+    attribution is summed against, because that differs by explanation family:
+    ``delta`` for a local attribution, the removal mask for a global one. The
+    score is
 
     ``1 - E[(predicted - observed)^2] / E[observed^2]``.
 
@@ -175,7 +195,9 @@ class FidelityScore(Metric):
             sampled = 0
             while sampled < n_perturb_samples:
                 count = min(max_examples_per_batch, n_perturb_samples - sampled)
-                perturbations = perturbation.sample(self.inputs, count, generator)
+                perturbations, weights = perturbation.sample(
+                    self.inputs, count, generator
+                )
                 perturbed_inputs = self.inputs.unsqueeze(0) - perturbations
 
                 flat_inputs = perturbed_inputs.flatten(0, 1)
@@ -185,7 +207,7 @@ class FidelityScore(Metric):
                 ).view(count, batch_size)
 
                 predicted_changes = (
-                    perturbations * self.attributions.unsqueeze(0)
+                    weights * self.attributions.unsqueeze(0)
                 ).flatten(2).sum(dim=2)
                 observed_changes = original_scores.unsqueeze(0) - perturbed_scores
                 attribution_error_sum += (
