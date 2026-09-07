@@ -45,6 +45,7 @@ def evaluate_faithfulness(
     metrics: set[str],
     perturbation: Perturbation,
     segments: torch.Tensor | None = None,
+    feature_mask: torch.Tensor | None = None,
 ) -> dict[str, MetricValue]:
     """Faithfulness scores for one attribution map, keyed by metric name.
 
@@ -54,7 +55,9 @@ def evaluate_faithfulness(
     Fidelity instead receives the original, unreduced attribution tensor
     because its magnitude and sign are part of the underlying infidelity
     calculation, and `perturbation` is the one Yeh et al. (2019) pair with the
-    method's explanation family.
+    method's explanation family. `feature_mask` is set only for the superpixel
+    methods, whose attribution holds one coefficient per segment rather than per
+    pixel; fidelity needs it to count each coefficient once.
     """
     from backend.metrics import (
         FidelityScore,
@@ -99,7 +102,7 @@ def evaluate_faithfulness(
         metric.update()
         scores["segment"] = float(metric.compute()[0].item())
     if "fidelity" in metrics:
-        metric = FidelityScore(model, inputs, attribution, target)
+        metric = FidelityScore(model, inputs, attribution, target, feature_mask)
         metric.update(
             n_perturb_samples=config.FIDELITY_N_PERTURB_SAMPLES,
             perturbation=perturbation,
@@ -406,6 +409,11 @@ class AtlasRunner:
                                     metrics,
                                     perturbations[method_name],
                                     segments,
+                                    getattr(
+                                        interp_method.runtime_kwargs_fn,
+                                        "last_mask",
+                                        None,
+                                    ),
                                 )
                             )
 

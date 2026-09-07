@@ -191,6 +191,9 @@ def _make_superpixel_runtime_kwargs(mask_fn: Callable[..., object], **seg_kwargs
         feature_count = int(torch.unique(cached_mask).numel())
         if feature_count < 2:
             raise InsufficientFeaturesError(feature_count)
+        # Fidelity needs the same mask to undo Captum's per-pixel repetition of
+        # each superpixel coefficient; the caller reads it back off this closure.
+        _runtime_kwargs.last_mask = cached_mask
         return {"feature_mask": cached_mask}
 
     return _runtime_kwargs

@@ -142,6 +142,7 @@ class FidelityScore(Metric):
         inputs: torch.Tensor,
         attributions: torch.Tensor,
         targets: torch.Tensor,
+        feature_mask: torch.Tensor | None = None,
     ) -> None:
         super().__init__()
         self.model = model
@@ -149,6 +150,28 @@ class FidelityScore(Metric):
         self.attributions = attributions.detach()
         self.targets = targets.detach()
         self._validate_inputs()
+        if feature_mask is not None:
+            self.attributions = self._share_over_features(
+                self.attributions, feature_mask
+            )
+
+    @staticmethod
+    def _share_over_features(
+        attributions: torch.Tensor, feature_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Divide a per-feature attribution by the entries it was repeated over.
+
+        Lime and KernelShap give one coefficient per superpixel, which Captum repeats
+        across every pixel and channel of that segment. Since `update` sums over
+        pixels, the coefficient would be counted once per entry (~1568x3 for a 224x224
+        image with 32 segments), inflating the predicted change. Sharing it evenly
+        over its entries makes the sum count it once, weighted by the fraction of the
+        segment the perturbation covers.
+        """
+        ids = feature_mask.expand_as(attributions)
+        # Counted on one sample, since every sample repeats the same segments.
+        entries_per_feature = torch.bincount(ids[0].reshape(-1))
+        return attributions / entries_per_feature[ids].to(attributions.dtype)
 
     @staticmethod
     def validate_inputs(inputs: torch.Tensor, targets: torch.Tensor) -> None:
