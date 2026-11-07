@@ -1930,7 +1930,10 @@ function ModelForm({ atlas, runs, datasets, labelSpaces }) {
   // no single subject.
   const selectModel = (model) => {
     if (model !== effectiveModel) setContextTab('model');
-    patch({ model, classId: null, imageId: null });
+    // Image ids are per-class indices shared by every model, so the class and
+    // image on screen carry over; one the new model lacks falls back to its
+    // first option without being forgotten.
+    patch({ model, classId: vs.classId ?? effectiveClassId, imageId: vs.imageId ?? effectiveImageId });
   };
   const selectDataset = (dataset) => {
     if (dataset !== effectiveDataset) { setContextTab('dataset'); setPickedMethod(null); setPickedModel(null); }
@@ -1980,10 +1983,7 @@ function ModelForm({ atlas, runs, datasets, labelSpaces }) {
     (vs.mode === 'class_compare' && classCompareMatrix.rows.length > 0);
 
   const handleModeChange = (mode) => {
-    const next = { ...vs, mode };
-    if (mode !== 'single') next.imageId = null;
-    setVs(next);
-    writeStateToUrl(next);
+    patch({ mode });
   };
 
   const methodLabel = (() => {
@@ -2076,7 +2076,7 @@ function ModelForm({ atlas, runs, datasets, labelSpaces }) {
 
       <CrumbSelect
         label="Class" value={effectiveClassId} items={classOptions}
-        onSelect={(v) => patch({ classId: v, imageId: null })}
+        onSelect={(v) => patch({ classId: v })}
         placeholder="Search class"
         disabled={!effectiveDataset || !classOptions.length}
       />

@@ -572,7 +572,7 @@ export const WIKI_SECTIONS = [
       {
         id: 'lif',
         title: 'LIF — Least Important First',
-        tags: ['Robustness', 'Pixel deletion'],
+        tags: ['Faithfulness', 'Pixel deletion'],
         summary: 'Removes pixels from least to most important and tracks the model\'s score. If the map ranks pixels well, the score holds until the important ones go.',
         formula: String.raw`\mathcal{R}_{\phi_i}(h) = \text{the } \phi_i|\Omega| \text{ lowest pixels of } h,\quad \phi_i = \tfrac{i}{N} \;\Rightarrow\; \mathrm{LIF}(h) = \mathrm{AUC}\big(\{ f(I \setminus \mathcal{R}_{\phi_i}(h)) \}_{i=0}^{N}\big)`,
         differs: 'It tests the ranking of the whole map, with no threshold. An early drop means the map called relevant pixels unimportant.',
@@ -589,7 +589,7 @@ export const WIKI_SECTIONS = [
       {
         id: 'morph',
         title: 'MES — Morph Erosion Score',
-        tags: ['Robustness', 'Erosion'],
+        tags: ['Faithfulness', 'Erosion'],
         summary: 'Keeps only the map\'s most important region and shrinks it from the border inward. A robust map keeps the prediction alive as the region erodes.',
         formula: String.raw`\mathcal{E}_0(h) = \{ h \ge \tau \}{\uparrow},\quad \mathcal{E}_i(h) = \mathcal{E}_{i-1}(h) \ominus B \;\Rightarrow\; \mathrm{MES}(h) = \mathrm{AUC}\big(\{ f(I \setminus \mathcal{E}_i(h)) \}_{i=0}^{N}\big)`,
         differs: 'It removes a contiguous region instead of loose pixels, so it rewards maps whose evidence is spatially coherent.',
@@ -606,7 +606,7 @@ export const WIKI_SECTIONS = [
       {
         id: 'segment',
         title: 'SAS — Segment\u2011wise Ablation Score',
-        tags: ['Robustness', 'Segment deletion'],
+        tags: ['Faithfulness', 'Segment deletion'],
         summary: 'Splits the image into segments, ranks them by mean attribution and removes them from least to most important.',
         formula: String.raw`h(S_k) = \tfrac{1}{|S_k|} \textstyle\sum_{u \in S_k} h(u),\quad \mathcal{Q}_{\psi_i}(h) = \text{least important segments up to } \psi_i|\Omega| \;\Rightarrow\; \mathrm{SAS}(h) = \mathrm{AUC}\big(\{ f(I \setminus \mathcal{Q}_{\psi_i}(h)) \}_{i=0}^{N}\big)`,
         differs: 'Like LIF but at the object level: it rewards maps that agree with the image\'s regions, and compares pixel and segment methods on the same footing.',
