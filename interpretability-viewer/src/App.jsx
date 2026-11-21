@@ -459,6 +459,9 @@ function metricTitle(name) {
 }
 
 const METRIC_ORDER = ['lif', 'morph', 'segment', 'fidelity', 'fidelity_superpixel'];
+// Display names that differ from the stored key (the thesis calls this metric MeS).
+const METRIC_LABEL = { morph: 'MeS' };
+const metricLabel = (name) => METRIC_LABEL[name] ?? name;
 
 function MetricBadges({ metrics }) {
   const shown = useContext(MetricsShownContext);
@@ -472,7 +475,7 @@ function MetricBadges({ metrics }) {
     <dl className="metric-badges" aria-label="Interpretability metrics">
       {items.map(({ name, title, value }) => (
         <div key={name} className={`metric-badge${name === 'fidelity_superpixel' ? ' metric-badge--wide' : ''}`} title={title}>
-          <dt>{name}</dt>
+          <dt>{metricLabel(name)}</dt>
           <dd>{formatMetricBadgeValue(value)}</dd>
         </div>
       ))}
@@ -589,7 +592,7 @@ function SortMenu({ sort, onChange }) {
           <path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <span className="sort-menu__label">Order</span>
-        <span className="sort-menu__value">{sort ? `${sort.metric} ${arrow}` : 'Sidebar'}</span>
+        <span className="sort-menu__value">{sort ? `${metricLabel(sort.metric)} ${arrow}` : 'Sidebar'}</span>
         <svg className="crumb__caret" viewBox="0 0 10 6" aria-hidden="true">
           <path d="M1 1.5 5 5 9 1.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -600,7 +603,7 @@ function SortMenu({ sort, onChange }) {
             {option(null, 'Sidebar order')}
             <div className="sort-menu__rule" />
             <div className="sort-menu__group">Rank by metric</div>
-            {METRIC_ORDER.map((name) => option(name, name))}
+            {METRIC_ORDER.map((name) => option(name, metricLabel(name)))}
           </div>
           <div className="sort-menu__rule" />
           <div className="sort-menu__group" id="sort-menu-dir">Direction</div>
